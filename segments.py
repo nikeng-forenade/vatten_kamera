@@ -60,13 +60,13 @@ DIGIT_MASKS: dict[str, int] = {
 # anses lysa. Da lases hålet i en nolla som tillslaget och siffran blir en
 # atta - precis det som gjorde att displayen alltid lastes som "888".
 SEGMENT_BOXES: dict[str, tuple[float, float, float, float]] = {
-    "a": (0.20, 0.04, 0.80, 0.17),
+    "a": (0.18, 0.04, 0.45, 0.17),
     "f": (0.02, 0.20, 0.26, 0.44),
     "b": (0.74, 0.20, 0.98, 0.44),
-    "g": (0.32, 0.44, 0.68, 0.57),
+    "g": (0.28, 0.44, 0.45, 0.57),
     "e": (0.02, 0.56, 0.26, 0.80),
     "c": (0.74, 0.56, 0.98, 0.80),
-    "d": (0.20, 0.83, 0.80, 0.96),
+    "d": (0.18, 0.83, 0.45, 0.96),
 }
 
 # Hur mycket fel en siffra far ha for att anda godtas (RMSE i normaliserad skala).
@@ -206,6 +206,21 @@ def decode_cell(
 # att vara beroende av kameran.
 # ---------------------------------------------------------------------------
 
+# Hur en riktig sjusegmentdisplay ser ut: de vagrata staplarna gar over hela
+# sifferbredden och de lodrata ligger langs kanterna. Den har geometrin anvands
+# bara av renderaren. Avlasaren mater med SEGMENT_BOXES, som medvetet ar smalare
+# - poangen ar att de tva ska vara oberoende, sa att ett fel i matfonstren
+# upptacks i stallet for att testet mater sin egen ritning.
+RENDER_BOXES: dict[str, tuple[float, float, float, float]] = {
+    "a": (0.08, 0.02, 0.92, 0.15),
+    "f": (0.03, 0.17, 0.22, 0.46),
+    "b": (0.78, 0.17, 0.97, 0.46),
+    "g": (0.08, 0.46, 0.92, 0.59),
+    "e": (0.03, 0.54, 0.22, 0.83),
+    "c": (0.78, 0.54, 0.97, 0.83),
+    "d": (0.08, 0.85, 0.92, 0.98),
+}
+
 
 def render_digit(
     char: str,
@@ -231,7 +246,7 @@ def render_digit(
     for index, name in enumerate(_SEGMENT_ORDER):
         if not (mask >> index) & 1:
             continue
-        fx1, fy1, fx2, fy2 = SEGMENT_BOXES[name]
+        fx1, fy1, fx2, fy2 = RENDER_BOXES[name]
         x1, x2 = int(fx1 * width), int(np.ceil(fx2 * width))
         y1, y2 = int(fy1 * height), int(np.ceil(fy2 * height))
         canvas[y1:y2, x1:x2] = foreground

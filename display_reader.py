@@ -753,6 +753,15 @@ def read_image(
     if getattr(cfg, "require_blank_first", False) and digits and not digits[0].blank:
         confidence = 0.0
 
+    # Displayen kan inte visa 888. Blir alla siffror attor beror det pa att
+    # gloden runt segmenten slagit igen halen i en nolla - inte pa att vardet
+    # verkligen ar 888. Att publicera 8.88 vore varre an att inte publicera
+    # nagot alls, sa en sadan lasning forkastas.
+    if getattr(cfg, "reject_all_eights", False) and digits:
+        visible = [digit.char for digit in digits if not digit.blank]
+        if visible and all(char == "8" for char in visible):
+            confidence = 0.0
+
     return Reading(
         value=value,
         confidence=confidence,

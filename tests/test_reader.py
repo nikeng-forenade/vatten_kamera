@@ -122,12 +122,11 @@ def test_kalibrerade_celler_anvands() -> None:
     assert reading.value == "1050"
 
 
-@pytest.mark.xfail(
-    reason="Kant: en ljus ram som ror vid ROI:ts kanter forskjuter rutnatet nagot. "
-    "I verkligheten haller vi ROI:t tat runt siffrorna sa att pumphuset hamnar utanfor.",
-    strict=True,
-)
 def test_bakgrund_som_ror_vid_kanten_ignoreras() -> None:
+    # Den har var tidigare markerad som en kand begransning: en ljus ram runt
+    # siffrorna forskot rutnatet. Den gar igenom sedan matfonstren for de
+    # vagrata segmenten smalnades av och den syntetiska renderaren fick en egen,
+    # realistisk geometri.
     # Pumphuset ar ljust och ror vid ROI:ts kanter - det ska inte tolkas som siffror.
     canvas, _ = render_number("1050")
     height, width = canvas.shape
