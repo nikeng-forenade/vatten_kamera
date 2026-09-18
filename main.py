@@ -241,25 +241,41 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
         print("utsnittet ar redan tight - behaller det")
 
     detected = detect_cells(normalized, binary, band, digits)
-    fitted, grid_score = fit_grid(normalized, binary, band, digits)
+    fitted, fitted_score = fit_grid(normalized, binary, band, digits)
 
-    # Dalarna mellan siffrorna ar inte alltid tillforlitliga: halet inne i en
-    # nolla ar ocksa morkt, och da skar indelningen sonder siffran i smala
-    # remsor. Vi provar darfor bada vagarna och behaller den indelning som far
-    # hogst poang, i stallet for att lita pa dalarna blint.
     from display_reader import score_boxes
 
-    if detected is not None:
-        detected_score = score_boxes(normalized, binary, band, detected)
-        if detected_score >= grid_score:
-            boxes = detected
-            grid_score = detected_score
-            print("cellerna hittades via mellanrummen mellan siffrorna")
-        else:
-            boxes = fitted
-            print("mellanrummen gav en samre indelning - rutnatet passades in med sokning")
+    # Ett fast sjusegmentsblock har jamnt fordelade sifferfonster, och dar ar en
+    # jamn delning av bandet det mest tillforlitliga: dalarna mellan siffrorna
+    # ar smala och latta att hamna fel pa (halet inne i en nolla ar ocksa
+    # morkt), och rutnatssokningen belonar dessutom breda celler eftersom de
+    # ger en sjalvsaker men felaktig "atta". Den jamna delningen traffar ratt sa
+    # lange alla positioner lyser, sa den provas forst. Dalarna och sokningen
+    # anvands bara om den skulle fa en riktigt dalig poang.
+    band_x1, band_y1, band_x2, band_y2 = band
+    span = band_x2 - band_x1
+    even = [
+        (
+            band_x1 + int(round(index * span / digits)),
+            band_y1,
+            band_x1 + int(round((index + 1) * span / digits)),
+            band_y2,
+        )
+        for index in range(digits)
+    ]
+    even_score = score_boxes(normalized, binary, band, even)
+
+    if even_score >= 0.0:
+        boxes = even
+        grid_score = even_score
+        print("jamn delning av bandet (fast sjusegmentsblock)")
+    elif detected is not None:
+        boxes = detected
+        grid_score = score_boxes(normalized, binary, band, detected)
+        print("cellerna hittades via mellanrummen mellan siffrorna")
     else:
         boxes = fitted
+        grid_score = fitted_score
         print("mellanrummen gick inte att hitta - rutnatet passades in med sokning")
 
     scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
