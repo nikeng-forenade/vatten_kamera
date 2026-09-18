@@ -28,6 +28,7 @@ from camera import CameraError, HikvisionCamera
 from config import ROOT, VERSION, Config, load_config
 from display_reader import (
     Calibration,
+    decode_cell,
     detect_cells,
     find_band,
     fit_grid,
@@ -91,6 +92,37 @@ def _xml_value(xml: str, tag: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _tighten_roi(
+    roi: tuple[int, int, int, int],
+    band: tuple[int, int, int, int],
+    cfg: Config,
+    shape: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    """Drar at ROI:t sa att det precis omsluter sifferbandet.
+
+    Blir ROI:t for stort hamnar tomt morker och pumphus med i bade troskling och
+    normalisering, och da blir siffrorna samre atergivna. Vi drar darfor at
+    utsnittet runt det band vi hittade och analyserar om.
+    """
+    scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
+    height, width = shape
+
+    x1 = int(round(roi[0] + band[0] / scale))
+    y1 = int(round(roi[1] + band[1] / scale))
+    x2 = int(round(roi[0] + band[2] / scale))
+    y2 = int(round(roi[1] + band[3] / scale))
+
+    pad_x = max(3, int(0.12 * (x2 - x1)))
+    pad_y = max(2, int(0.25 * (y2 - y1)))
+
+    return (
+        max(0, x1 - pad_x),
+        max(0, y1 - pad_y),
+        min(width, x2 + pad_x),
+        min(height, y2 + pad_y),
+    )
+
+
 def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
     """Hittar displayen i en bild och sparar ett kalibrerat rutnat.
 
@@ -151,6 +183,16 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
 
     normalized, binary = preprocess(analysis_image, roi, cfg.reader)
     band = find_band(binary)
+
+    # Dra at utsnittet runt det band vi hittade och analysera om. Da slipper man
+    # sitta och passa in ROI:t for hand, och tolkningen blir sakrare nar varken
+    # tomt morker eller pumphus kommer med.
+    tightened = _tighten_roi(roi, band, cfg, (height, width))
+    if tightened != roi:
+        print(f"drar at utsnittet: {roi} -> {tightened}")
+        roi = tightened
+        normalized, binary = preprocess(analysis_image, roi, cfg.reader)
+        band = find_band(binary)
 
     detected = detect_cells(normalized, binary, band, digits)
     if detected is not None:
@@ -399,6 +441,100 @@ def cmd_peek(cfg: Config, args: argparse.Namespace) -> int:
     print(f"ROI  : {roi}  ({x2 - x1}x{y2 - y1} px)")
     print(f"{args.scale:g}x forstoring -> {out}  ({big.shape[1]}x{big.shape[0]} px)")
     return 0
+
+
+def cmd_diagnose(cfg: Config, args: argparse.Namespace) -> int:
+    """Sager till om kameran star tillrackligt nara for att kunna lasa displayen.
+
+    Kor den har forst nar nagot inte fungerar: den svarar pa om problemet sitter
+    i kameran, i ljuset eller i sjalva tolkningen.
+    """
+    from camera_settings import CameraSettings, CameraSettingsError
+    from display_reader import detect_cells as detect, score_boxes
+
+    camera = HikvisionCamera(cfg.camera)
+    frames = []
+    try:
+        for index in range(max(1, args.frames)):
+            frames.append(camera.snapshot())
+            if index < args.frames - 1:
+                time.sleep(1.0)
+    except CameraError as exc:
+        print(f"FEL: {exc}")
+        return 1
+    finally:
+        camera.close()
+
+    image = np.max(np.stack([f.image for f in frames]), axis=0) if len(frames) > 1 else frames[-1].image
+    if not cfg.calibration_roi:
+        print("FEL: CALIBRATION_ROI maste vara satt i .env")
+        return 2
+    roi = cfg.calibration_roi
+
+    normalized, binary = preprocess(image, roi, cfg.reader)
+    band = find_band(binary)
+
+    scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
+    row_width = (band[2] - band[0]) / scale
+    row_height = (band[3] - band[1]) / scale
+    per_digit = row_width / cfg.reader.digit_count
+
+    boxes = detect(normalized, binary, band, cfg.reader.digit_count)
+    method = "mellanrummen mellan siffrorna"
+    if boxes is None:
+        boxes, _ = fit_grid(normalized, binary, band, cfg.reader.digit_count)
+        method = "inpassning med sokning"
+    score = score_boxes(normalized, binary, band, boxes)
+
+    print(f"version        : {VERSION}")
+    print(f"bild           : {image.shape[1]}x{image.shape[0]} px, {len(frames)} bilder i stacken")
+    print(f"utsnitt (ROI)  : {roi[0]},{roi[1]},{roi[2]},{roi[3]}")
+    print(f"sifferband     : {row_width:.0f}x{row_height:.0f} px   ({per_digit:.1f} px per siffra)")
+    print(f"cellindelning  : {method}")
+    print(f"lasbarhetspoang: {score:+.3f}")
+
+    print("\nsiffrorna just nu (ur tidsstacken - alla positioner samtidigt):")
+    print("(en tidsstack visar allt som lyst under körningen, sa en siffra kan se")
+    print(" ut som en atta trots att den aldrig visat en atta - det ar vantan)")
+    for index, box in enumerate(boxes, start=1):
+        cell = normalized[box[1] : box[3], box[0] : box[2]]
+        result = decode_cell(cell) if cell.size else None
+        if result is None:
+            continue
+        print(f"  siffra {index}: {result.char!r} konfidens {result.confidence:.2f}")
+
+    try:
+        settings = CameraSettings(cfg.camera)
+        values = settings.read()
+        print("\nkameran:")
+        for key in ("ircut", "exposure_type", "gain", "shutter", "sharpness", "wdr_mode"):
+            if key in values:
+                print(f"  {key:<14} {values[key]}")
+        if values.get("ircut") == "night":
+            print("  -> NATTLAGE: displayen branner ut. Kor: main.py image set ircut=day")
+    except CameraSettingsError as exc:
+        print(f"kameran: kunde inte lasas ({exc})")
+
+    print("\nbedomning:")
+    ok = True
+    if per_digit < 25:
+        print(f"  FOR LITEN: bara {per_digit:.0f} px per siffra. Segmenten gar inte att skilja.")
+        print("             Flytta kameran namare - sikta pa minst 30 px per siffra")
+        print(f"             (alltsa {30 * cfg.reader.digit_count:.0f} px for hela raden).")
+        ok = False
+    elif per_digit < 30:
+        print(f"  PA GRANSEN: {per_digit:.0f} px per siffra. Kan ga, men osakert.")
+    else:
+        print(f"  BRA: {per_digit:.0f} px per siffra.")
+
+    if score < 0.30:
+        print(f"  LASBARHETEN AR LAG ({score:+.3f}). Kontrollera exponering och troskel.")
+        ok = False
+
+    if ok:
+        print("  Allt ser bra ut. Kor 'main.py calibrate --save' och sedan 'main.py read'.")
+
+    return 0 if ok else 1
 
 
 def cmd_watch(cfg: Config, args: argparse.Namespace) -> int:
@@ -672,6 +808,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="visa de rada pixlarna utan utjamning (bra for att bedoma skarpa)",
     )
     peek.set_defaults(func=cmd_peek)
+
+    diagnose = sub.add_parser("diagnose", help="bedom om kameran star tillrackligt nara")
+    diagnose.add_argument("--frames", type=int, default=5, help="antal bilder i tidsstacken")
+    diagnose.set_defaults(func=cmd_diagnose)
 
     lamp = sub.add_parser("lamp", help="tanda, slacka eller las av lampan")
     lamp.add_argument("action", choices=["on", "off", "state"])

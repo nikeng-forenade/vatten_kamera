@@ -199,6 +199,25 @@
 			"args": [],
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Diagnos",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"diagnose"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Git: commit 3",
+			"type": "shell",
+			"command": "cd F:\\vscode\\vatten_kamera; 'Automatisk atdragning av utsnittet och ett diagnoskommando`n`n- main.py calibrate drar nu sjalv at ROI:t runt sifferbandet och analyserar om.`n  Da slipper man passa in CALIBRATION_ROI for hand, och tolkningen blir`n  sakrare nar varken tomt morker eller pumphus kommer med.`n- Nytt kommando main.py diagnose som svarar pa om problemet sitter i kameran,`n  i ljuset eller i tolkningen. Den mater hur manga pixlar varje siffra far`n  och sager till nar kameran star for langt bort.`n`nTester: 15 passerar, 1 xfail.' | Out-File -Encoding utf8 captures\\commit_msg.txt; git add -A; git -c user.name='nikeng-forenade' -c user.email='nikeng-forenade@users.noreply.github.com' commit -F captures\\commit_msg.txt; git push",
+			"args": [],
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }
