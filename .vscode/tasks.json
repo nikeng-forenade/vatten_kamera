@@ -295,6 +295,14 @@
 			"args": [],
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Git: ta bort kamerabackupen",
+			"type": "shell",
+			"command": "git rm --cached --ignore-unmatch camera_settings_backup.json; git add -A; git -c user.name='nikeng-forenade' -c user.email='nikeng-forenade@users.noreply.github.com' commit -m 'Kamerans backup och lasprofil ar lokal konfiguration, inte kod'; git push; git ls-files | Select-String -Pattern 'camera_|calibration'",
+			"args": [],
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }
