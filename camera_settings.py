@@ -21,14 +21,16 @@ import numpy as np
 import requests
 from requests.auth import HTTPBasicAuth
 
-import numpy as np
-
 from config import ROOT, CameraConfig
 
 log = logging.getLogger(__name__)
 
 IMAGE_URL = "/ISAPI/Image/channels/1"
 BACKUP_FILE = ROOT / "camera_settings_backup.json"
+# Det kameralage som anvands under sjalva lasningen. Kameran lanas till detta
+# lage strax innan och laggs tillbaka direkt efterat, sa att den inte lamnas i
+# ett lage som gor bilden mork for allt annat.
+PROFILE_FILE = ROOT / "camera_profile.json"
 
 # Etikett -> regex som pekar ut vardet i XML:en.
 # Taggnamnen ar inte unika i dokumentet (t.ex. <mode> finns pa flera stallen),
@@ -107,8 +109,18 @@ class CameraSettings:
                 values[key] = match.group(2).strip()
         return values
 
-    def backup(self) -> Path:
-        """Sparar nuvarande installningar sa de kan aterstallas."""
+    def backup(self, *, force: bool = False) -> Path:
+        """Sparar nuvarande installningar sa de kan aterstallas.
+
+        Skriver aldrig over en befintlig backup utan tvingas. En backup som
+        skrivs over ar vardelos, och da gar det inte att komma tillbaka till
+        utgangslaget - vilket hande en gang och gjorde att kamerans eget
+        nattlage inte gick att fa tillbaka.
+        """
+        if BACKUP_FILE.exists() and not force:
+            log.info("backup finns redan (%s) - ror den inte", BACKUP_FILE.name)
+            return BACKUP_FILE
+
         if not self.xml:
             self.read()
         BACKUP_FILE.write_text(
@@ -126,6 +138,76 @@ class CameraSettings:
         )
         log.info("bildinstallningar backade upp -> %s", BACKUP_FILE.name)
         return BACKUP_FILE
+
+    # --- Spara och lagga tillbaka lage runt en korning ---------------------
+
+    def capture(self) -> str:
+        """Kamerans installningar som XML, for att kunna lagga tillbaka dem."""
+        if not self.xml:
+            self.read()
+        return self.xml
+
+    def push(self, xml: str) -> dict[str, str]:
+        """Lagger tillbaka ett tidigare sparat XML-dokument."""
+        self.put_xml(xml)
+        self.read()
+        return self.values
+
+    def save_profile(self, settings: dict[str, str] | None = None) -> Path:
+        """Sparar det kameralage som ska anvandas under sjalva lasningen.
+
+        Kameran rors inte - bara filen skrivs. Det gor att man kan bestamma
+        laslaget utan att forst behova stalla om kameran.
+        """
+        values = dict(settings or self.read())
+
+        unknown = [key for key in values if key not in PATTERNS]
+        if unknown:
+            raise CameraSettingsError(
+                f"okanda installningar: {', '.join(unknown)}. Giltiga: {', '.join(PATTERNS)}"
+            )
+        for key, value in values.items():
+            allowed = ALLOWED.get(key)
+            if allowed and value not in allowed:
+                raise CameraSettingsError(f"{key} maste vara en av {', '.join(allowed)}")
+
+        PROFILE_FILE.write_text(
+            json.dumps({"settings": values}, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        log.info("lasprofil sparad -> %s", PROFILE_FILE.name)
+        return PROFILE_FILE
+
+    def load_profile(self) -> dict[str, str] | None:
+        """Laser lasprofilen, om det finns nagon."""
+        if not PROFILE_FILE.exists():
+            return None
+        try:
+            data = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("kunde inte lasa %s: %s", PROFILE_FILE.name, exc)
+            return None
+        settings = data.get("settings")
+        return settings if isinstance(settings, dict) and settings else None
+
+
+    def put_xml(self, xml: str) -> None:
+        """Skickar ett helt XML-dokument till kameran."""
+        url = f"{self.cfg.base_url}{IMAGE_URL}"
+        try:
+            response = self._session.put(
+                url,
+                data=xml.encode("utf-8"),
+                headers={"Content-Type": "application/xml"},
+                timeout=self.cfg.timeout_s,
+            )
+        except requests.RequestException as exc:
+            raise CameraSettingsError(f"kunde inte na kameran: {exc}") from exc
+
+        if response.status_code not in (200, 201, 204):
+            raise CameraSettingsError(
+                f"kameran avvisade andringen: HTTP {response.status_code} {response.text[:300]}"
+            )
 
     def apply(self, changes: dict[str, str]) -> dict[str, str]:
         """Andrar angivna installningar och verifierar resultatet."""
@@ -150,21 +232,7 @@ class CameraSettings:
                 raise CameraSettingsError(f"hittade inte {key} i kamerans XML")
             updated = re.sub(pattern, lambda m: m.group(1) + value + m.group(3), updated, count=1, flags=re.DOTALL)
 
-        url = f"{self.cfg.base_url}{IMAGE_URL}"
-        try:
-            response = self._session.put(
-                url,
-                data=updated.encode("utf-8"),
-                headers={"Content-Type": "application/xml"},
-                timeout=self.cfg.timeout_s,
-            )
-        except requests.RequestException as exc:
-            raise CameraSettingsError(f"kunde inte na kameran: {exc}") from exc
-
-        if response.status_code not in (200, 201, 204):
-            raise CameraSettingsError(
-                f"kameran avvisade andringen: HTTP {response.status_code} {response.text[:300]}"
-            )
+        self.put_xml(updated)
 
         # Las om och kontrollera vad som faktiskt galler nu.
         self.read()
@@ -180,16 +248,7 @@ class CameraSettings:
         if not original_xml:
             raise CameraSettingsError("backupen innehaller ingen XML")
 
-        url = f"{self.cfg.base_url}{IMAGE_URL}"
-        response = self._session.put(
-            url,
-            data=original_xml.encode("utf-8"),
-            headers={"Content-Type": "application/xml"},
-            timeout=self.cfg.timeout_s,
-        )
-        if response.status_code not in (200, 201, 204):
-            raise CameraSettingsError(f"kunde inte aterstalla: HTTP {response.status_code}")
-
+        self.put_xml(original_xml)
         self.read()
         return self.values
 

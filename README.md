@@ -64,13 +64,14 @@ Det här är den enskilt viktigaste faktorn för att läsningen ska bli pålitli
 
 * **Placera kameran 25–40 cm från displayen, rakt framifrån.** Snedbild trycker ihop
   siffrorna och ger perspektivfel.
-* **Sifferraden bör vara minst ~300 px bred** i den 2048 px breda bilden. Det ger ca
-  4 px per segment, vilket är nedre gränsen för att segmenten ska gå att skilja.
-  Är displayen mindre i bilden än så blir läsningen osäker.
+* **Sifferraden bör vara minst ~120 px bred** i den 2048 px breda bilden, alltså ca
+  40 px per siffra. Det ger tillräckligt många pixlar per segment.
+  Kör `run.cmd main.py diagnose` — den säger till om det räcker.
+* **Sätt displayen i bildens mitt.** Billiga kameror är påtagligt suddigare i
+  hörnen, och displayen hamnar lätt där annars.
 * **Tippa kameran 5–10°** så att du inte ser displayglaset rakt i reflex — annars
-  speglas siffrorna som en spegelvänd dubblett under originalet.
+  speglas siffrorna som en spegelvänd dubblett.
 * **Lampan ska lysa displayen, inte in i objektivet.** Sätt den vid sidan/ovanifrån.
-  Bländar lampan kameran bränns siffrorna ut helt.
 
 ## Kalibrering
 
@@ -117,6 +118,8 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `main.py watch` | Följer displayen live som text i terminalen |
 | `main.py lamp on\|off\|state` | Testar lampan via Home Assistant |
 | `main.py image show\|set\|tune\|restore` | Kamerans bildinställningar |
+| `main.py image save-profile\|show-profile` | Läget kameran lånas till under läsningen |
+| `main.py diagnose` | Säger till om kameran står nära nog |
 | `main.py mqtt-test --value 1050` | Publicerar ett provvärde så sensorerna dyker upp i HA |
 | `main.py run` | En komplett körning direkt (lampa, läsning, publicering) |
 | `main.py daemon` | Väntar in klockslaget och kör varje natt |
@@ -197,6 +200,28 @@ något ändras, så `image restore` kan alltid ta dig tillbaka.
 | **Dagsläge (`ircut=day`) i stället för nattläge** | Displayen är en röd LED. I svartvitt nattläge brände den ut till en vit klump utan igenkännbara segment. |
 | **Läs blåkanalen, inte gråskala** | Rött ljus har inget blått. I blåkanalen lyser siffrorna medan den röda glöden runt dem blir svart — det ger en ren, skarp bild. Sätts med `COLOR_CHANNEL=b`. |
 | **Hög tröskel (`THRESHOLD=215`)** | Siffrorna är mättade medan spegelbilden i displayglaset är svag. Tröskeln håller spegelbilden borta så att sifferbandet inte blir för högt. |
+
+### Läsprofilen — kameran lånas bara under läsningen
+
+Kameran används till att se rummet, och i det läget (nattläge med IR och hög
+förstärkning) bränner den självlysande displayen ut till en vit klump. Därför har
+programmet två separata lägen:
+
+* **Kamerans eget läge** — ditt normala, orört. Det gäller hela dygnet.
+* **Läsprofilen** (`camera_profile.json`) — används bara under själva lässekunden.
+
+Kedjan är: spara kamerans läge → byt till läsprofilen → läs → **lägg tillbaka
+kamerans läge**. Återställningen ligger i ett `finally`-block, så den sker även om
+läsningen kraschar. Kameran lämnas aldrig i ett läge som gör bilden mörk.
+
+```powershell
+run.cmd main.py image show-profile                     # visa läget och vad som ändras
+run.cmd main.py image save-profile ircut=day gain=20 shutter=1/100
+run.cmd main.py image tune                            # hitta bästa exponering
+```
+
+`save-profile` rör inte kameran — den skriver bara filen, så du kan bestämma
+läget i förväg. Stäng av hela mekanismen med `USE_CAMERA_PROFILE=false`.
 
 ### Se vad avläsaren ser
 

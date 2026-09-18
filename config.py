@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 ROOT = Path(__file__).resolve().parent
 CALIBRATION_FILE = ROOT / "calibration.json"
@@ -125,6 +125,9 @@ class RunConfig:
     lamp_cooldown_s: float = 1.0
     # Spara bilderna fran korningen (bevis vid felsokning).
     save_frames: bool = True
+    # Kameran lanas till lasprofilen (camera_profile.json) strax innan lasningen
+    # och laggs tillbaka direkt efter, sa att den inte lamnas i ett morkt lage.
+    use_camera_profile: bool = True
     # Spara bara bilder dar ett varde kunde lasas.
     save_only_success: bool = False
     # Antal bilder som maste vara eniga for att vardet ska publiceras.
@@ -222,6 +225,7 @@ def load_config() -> Config:
         lamp_warmup_s=_get_float("LAMP_WARMUP_S", 2.0),
         lamp_cooldown_s=_get_float("LAMP_COOLDOWN_S", 1.0),
         save_frames=_get_bool("SAVE_FRAMES", True),
+        use_camera_profile=_get_bool("USE_CAMERA_PROFILE", True),
         save_only_success=_get_bool("SAVE_ONLY_SUCCESS", False),
         min_agreement=_get_int("MIN_AGREEMENT", 3),
         min_confidence=_get_float("MIN_CONFIDENCE", 0.75),

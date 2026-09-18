@@ -70,6 +70,49 @@ class NightlyRunner:
         self.calibration = Calibration.load(cfg.calibration_file)
         # Hur olika tva bilder far vara for att anses visa samma varde.
         self.similarity_threshold = cfg.run.group_threshold
+        self.use_camera_profile = cfg.run.use_camera_profile
+
+    # --- Kameralage -------------------------------------------------------
+
+    def _apply_camera_profile(self) -> str:
+        """Lanar kameran till lasprofilen och returnerar laget som ska tillbaka.
+
+        Kameran anvands normalt till att se rummet, och i det laget branner den
+        sjalvlysande displayen ut till en vit klump. Vi byter darfor bara lage
+        under sjalva lasningen och lagger tillbaka det direkt efterat.
+        """
+        from camera_settings import CameraSettings, CameraSettingsError
+
+        try:
+            settings = CameraSettings(self.cfg.camera)
+            profile = settings.load_profile()
+            if not profile:
+                log.info("ingen lasprofil sparad - kameralaget lamnas som det ar")
+                return ""
+
+            original = settings.capture()
+            settings.apply(profile)
+            log.info(
+                "kameran lanas till lasprofilen: %s",
+                ", ".join(f"{key}={value}" for key, value in profile.items()),
+            )
+            return original
+        except CameraSettingsError as exc:
+            log.error("kunde inte byta kameralage: %s", exc)
+            return ""
+
+    def _restore_camera(self, original_xml: str) -> None:
+        """Lagger tillbaka kamerans eget lage."""
+        if not original_xml:
+            return
+
+        from camera_settings import CameraSettings, CameraSettingsError
+
+        try:
+            CameraSettings(self.cfg.camera).push(original_xml)
+            log.info("kameran aterstalld till sitt eget lage")
+        except CameraSettingsError as exc:
+            log.error("KUNDE INTE ATERSTALLA KAMERAN: %s", exc)
 
     # --- Tid ---------------------------------------------------------------
 
@@ -213,6 +256,7 @@ class NightlyRunner:
         run_dir = RUNS_DIR / started.strftime("%Y%m%d_%H%M%S") if save else None
         lamp_is_on = False
         error = ""
+        original_camera_xml = ""
         readings: list[Reading] = []
         result = Consensus(value=None, votes=0, total=0, confidence=0.0)
 
@@ -220,6 +264,9 @@ class NightlyRunner:
 
         try:
             self.mqtt.connect()
+
+            if self.use_camera_profile:
+                original_camera_xml = self._apply_camera_profile()
 
             if self.use_lamp and self.ha.has_lamp:
                 try:
@@ -269,6 +316,8 @@ class NightlyRunner:
                     self.ha.lamp_off()
                 except HaError as exc:
                     log.error("kunde inte slacka lampan: %s", exc)
+
+            self._restore_camera(original_camera_xml)
 
             summary = RunSummary(
                 version=VERSION,

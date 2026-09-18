@@ -6,6 +6,11 @@
 # med "main.py calibrate --save". Den ska inte folja med till en annan maskin.
 calibration.json
 
+# Kamerans egna installningar och den lasprofil som anvands vid lasning.
+# Bada ar lokala for just den har kameran.
+camera_settings_backup.json
+camera_profile.json
+
 # Fångade bilder / debug
 captures/
 debug_frames/

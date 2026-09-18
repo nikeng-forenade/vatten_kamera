@@ -234,6 +234,67 @@
 			"args": [],
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Återställ kameran",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"image",
+				"restore"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Tillbaka till nattläge",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"image",
+				"set",
+				"ircut=night"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Spara läsprofil",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"image",
+				"save-profile",
+				"ircut=day",
+				"gain=20",
+				"shutter=1/100",
+				"overexpose_suppress=true"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Visa läsprofil",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"image",
+				"show-profile"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Git: commit 5",
+			"type": "shell",
+			"command": "git rm --cached camera_settings_backup.json -ErrorAction SilentlyContinue; git add -A; git -c user.name='nikeng-forenade' -c user.email='nikeng-forenade@users.noreply.github.com' commit -m 'Kameran lanas bara under lasningen - den lamnas aldrig i ett morkt lage' -m 'Kameran anvands till att se rummet, och i det laget branner den sjalvlysande displayen ut. Programmet sparar nu kamerans eget lage, byter till en lasprofil (camera_profile.json), laser, och lagger tillbaka kamerans lage i ett finally-block sa att det sker aven om lasningen kraschar. Tva fel som gjorde att kameran kunde bli mork ar ocksa rattade: backupen skrivs inte langre over av tune-kommandot (det gjorde att kamerans eget nattlage inte gick att fa tillbaka), och kameralaget ar nu lokal konfiguration som inte versionshanteras. Nya kommandon: image save-profile och show-profile. Tester: 25 passerar, 1 xfail.'; git push; git log --oneline -2",
+			"args": [],
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }

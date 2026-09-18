@@ -617,6 +617,39 @@ def cmd_image(cfg: Config, args: argparse.Namespace) -> int:
                 print(f"  {key:<22} {value}{hint}")
             return 0
 
+        if args.action == "save-profile":
+            profile: dict[str, str] = {}
+            for item in args.changes:
+                if "=" not in item:
+                    print(f"FEL: '{item}' ska skrivas nyckel=värde")
+                    return 2
+                key, value = item.split("=", 1)
+                profile[key.strip()] = value.strip()
+
+            path = settings.save_profile(profile or None)
+            saved = settings.load_profile() or {}
+            print(f"lasprofil sparad -> {path}")
+            for key, value in saved.items():
+                print(f"  {key:<22} {value}")
+            print("\nkameran rordes inte. Laget anvands bara under lasningen,")
+            print("och kamerans eget lage lags tillbaka direkt efterat.")
+            return 0
+
+        if args.action == "show-profile":
+            profile = settings.load_profile()
+            if not profile:
+                print("ingen lasprofil sparad - kameran lamnas som den ar")
+                return 0
+            print("lasprofil (anvands bara under lasningen):")
+            for key, value in profile.items():
+                print(f"  {key:<22} {value}")
+            print("\nkameran har nu:")
+            current = settings.read()
+            for key in profile:
+                marker = "" if current.get(key) == profile[key] else "   <- andras vid lasning"
+                print(f"  {key:<22} {current.get(key, '?')}{marker}")
+            return 0
+
         if args.action == "backup":
             path = settings.backup()
             print(f"backup sparad -> {path}")
@@ -646,7 +679,6 @@ def cmd_image(cfg: Config, args: argparse.Namespace) -> int:
             if not BACKUP_FILE.exists():
                 settings.backup()
                 print(f"(sparade en backup av nuvarande installningar -> {BACKUP_FILE.name})")
-
             before = settings.read()
             print("andrar:")
             for key, value in changes.items():
@@ -822,7 +854,10 @@ def build_parser() -> argparse.ArgumentParser:
     mqtt.set_defaults(func=cmd_mqtt_test)
 
     image = sub.add_parser("image", help="kamerans bildinstallningar")
-    image.add_argument("action", choices=["show", "backup", "set", "restore", "tune"])
+    image.add_argument(
+        "action",
+        choices=["show", "backup", "set", "restore", "tune", "save-profile", "show-profile"],
+    )
     image.add_argument(
         "changes",
         nargs="*",
