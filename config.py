@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 ROOT = Path(__file__).resolve().parent
 CALIBRATION_FILE = ROOT / "calibration.json"
@@ -129,6 +129,10 @@ class RunConfig:
     min_agreement: int = 3
     # Minsta konfidens per siffra (0-1) for att en lasning ska raknas.
     min_confidence: float = 0.75
+    # Tva bilder som visar samma varde laggs ihop innan tolkning. Detta ar den
+    # storsta tillatna medelskillnaden mellan dem (0-255). Brus ligger lagt,
+    # ett vardebyte ligger hogt.
+    group_threshold: float = 8.0
     # Sand notis till HA om lasningen misslyckas.
     notify_on_failure: bool = False
 
@@ -140,6 +144,10 @@ class ReaderConfig:
     # Antal tecken i displayen (siffror + ev. separatorer).
     # 5 = t.ex. "1050" med en separat decimalpunkt, se calibration.json.
     digit_count: int = 4
+    # Vilken fargkanal som blir graaskala: "auto", "gray", "r", "g" eller "b".
+    # En rod LED-display lyser starkast i rodkanalen, sa "auto" valjer den kanal
+    # som har storst kontrast - det ger flera ganger battre skillnad an graaskala.
+    channel: str = "auto"
     # Forstoring innan troskling - sma siffror behover mer pixlar.
     upscale: float = 5.0
     # Normalisera ljusstyrkan innan troskling (klarar svagt ljus battre).
@@ -208,11 +216,13 @@ def load_config() -> Config:
         save_only_success=_get_bool("SAVE_ONLY_SUCCESS", False),
         min_agreement=_get_int("MIN_AGREEMENT", 3),
         min_confidence=_get_float("MIN_CONFIDENCE", 0.75),
+        group_threshold=_get_float("GROUP_THRESHOLD", 8.0),
         notify_on_failure=_get_bool("NOTIFY_ON_FAILURE", False),
     )
 
     reader = ReaderConfig(
         digit_count=_get_int("DIGIT_COUNT", 4),
+        channel=_get("COLOR_CHANNEL", "auto"),
         upscale=_get_float("UPSCALE", 5.0),
         normalize=_get_bool("NORMALIZE", True),
         invert=_get_bool("INVERT", False),

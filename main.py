@@ -18,6 +18,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from datetime import datetime
 
 import cv2
@@ -27,6 +28,7 @@ from camera import CameraError, HikvisionCamera
 from config import ROOT, VERSION, Config, load_config
 from display_reader import (
     Calibration,
+    detect_cells,
     find_band,
     fit_grid,
     preprocess,
@@ -90,19 +92,36 @@ def _xml_value(xml: str, tag: str) -> str | None:
 
 
 def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
-    """Hittar displayen i en bild och sparar ett kalibrerat rutnat."""
+    """Hittar displayen i en bild och sparar ett kalibrerat rutnat.
+
+    Displayen vaxlar varde hela tiden, och en siffra som rakar vara slackt just
+    nu syns inte alls. Vi tar darfor ett antal bilder och behaller det ljusaste
+    vardet per pixel. Da framtrader alla sifferpositioner samtidigt, oavsett
+    vilket varde som rakade visas.
+    """
     camera = HikvisionCamera(cfg.camera)
+    frames = []
     try:
-        frame = camera.snapshot()
+        for index in range(max(1, args.frames)):
+            frames.append(camera.snapshot())
+            if index < args.frames - 1:
+                time.sleep(args.interval)
     except CameraError as exc:
         print(f"FEL: {exc}")
         return 1
     finally:
         camera.close()
 
-    image = frame.image
+    image = frames[-1].image
     height, width = image.shape[:2]
     print(f"bild: {width}x{height} px")
+
+    if len(frames) > 1:
+        stacked = np.max(np.stack([f.image for f in frames]), axis=0)
+        print(f"lade ihop {len(frames)} bilder till en tidsstack")
+        analysis_image = stacked
+    else:
+        analysis_image = image
 
     if args.roi:
         roi = tuple(int(v) for v in args.roi.split(","))
@@ -114,7 +133,7 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
         print(f"ROI fran .env: {roi[0]},{roi[1]},{roi[2]},{roi[3]}")
     else:
         # Foresla ett ROI utifran var siffrorna sitter i hela bilden.
-        roi = _suggest_roi(image, cfg)
+        roi = _suggest_roi(analysis_image, cfg)
         print(f"foreslaget ROI: {roi[0]},{roi[1]},{roi[2]},{roi[3]}")
 
     digits = args.digits or cfg.reader.digit_count
@@ -127,9 +146,20 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
     marked_path = DEBUG_DIR / f"calibrate_{stamp}_roi.png"
     cv2.imwrite(str(marked_path), marked)
 
-    normalized, binary = preprocess(image, roi, cfg.reader)
+    if len(frames) > 1:
+        cv2.imwrite(str(DEBUG_DIR / f"calibrate_{stamp}_stack.png"), analysis_image[roi[1] : roi[3], roi[0] : roi[2]])
+
+    normalized, binary = preprocess(analysis_image, roi, cfg.reader)
     band = find_band(binary)
-    boxes, grid_score = fit_grid(normalized, binary, band, digits)
+
+    detected = detect_cells(normalized, binary, band, digits)
+    if detected is not None:
+        boxes = detected
+        grid_score = float("nan")
+        print("cellerna hittades via mellanrummen mellan siffrorna")
+    else:
+        boxes, grid_score = fit_grid(normalized, binary, band, digits)
+        print("mellanrummen gick inte att hitta - rutnatet passades in med sokning")
 
     scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
     absolute = [
@@ -143,10 +173,14 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
     ]
 
     calibration = Calibration(roi=roi, digit_count=digits, cell_boxes=absolute)
-    reading = read_image(image, calibration, cfg.reader, timestamp=frame.timestamp)
+
+    # Läs den senaste bilden med rutnatet - tidsstacken visar flera varden och
+    # gar inte att tolka som ett tal.
+    reading = read_image(image, calibration, cfg.reader, timestamp=frames[-1].timestamp)
 
     print(f"\nsifferband : {band}")
-    print(f"rutnatspoang: {grid_score:.3f}")
+    if grid_score == grid_score:  # inte NaN
+        print(f"rutnatspoang: {grid_score:.3f}")
     print(f"last varde : {reading.value!r}   konfidens {reading.confidence:.3f}\n")
 
     for index, (box, digit) in enumerate(zip(absolute, reading.digits), start=1):
@@ -158,6 +192,28 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
     for box in absolute:
         cv2.rectangle(marked, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 2)
     cv2.imwrite(str(marked_path), marked)
+
+    # Rita ut de sju samplingsrutorna per siffra ovanpa den bild avlasaren ser.
+    # Gron ruta = avlasaren tycker att segmentet lyser. Da syns det direkt om
+    # rutorna sitter pa segmenten eller bredvid.
+    from segments import SEGMENT_BOXES
+
+    canvas = cv2.cvtColor((normalized * 255).astype("uint8"), cv2.COLOR_GRAY2BGR)
+    for cell, digit in zip(boxes, reading.digits):
+        cx1, cy1, cx2, cy2 = cell
+        cell_w = cx2 - cx1
+        cell_h = cy2 - cy1
+        for name, (fx1, fy1, fx2, fy2) in SEGMENT_BOXES.items():
+            sx1 = cx1 + int(round(fx1 * cell_w))
+            sx2 = cx1 + int(round(fx2 * cell_w))
+            sy1 = cy1 + int(round(fy1 * cell_h))
+            sy2 = cy1 + int(round(fy2 * cell_h))
+            lit = digit.segment_values.get(name, 0.0) > 0.5
+            colour = (0, 255, 0) if lit else (0, 0, 255)
+            cv2.rectangle(canvas, (sx1, sy1), (sx2, sy2), colour, 1)
+    segments_path = DEBUG_DIR / f"calibrate_{stamp}_segments.png"
+    cv2.imwrite(str(segments_path), canvas)
+    print(f"segmentrutor -> {segments_path}  (gron = lyser, rod = slackt)")
 
     if args.save:
         cfg.calibration_file.write_text(
@@ -307,9 +363,37 @@ def cmd_peek(cfg: Config, args: argparse.Namespace) -> int:
         print(f"FEL: ROI {roi} ligger utanfor bilden {width}x{height}")
         return 2
 
-    big = cv2.resize(crop, None, fx=args.scale, fy=args.scale, interpolation=cv2.INTER_CUBIC)
-    out = DEBUG_DIR / "peek.png"
+    big = cv2.resize(
+        crop,
+        None,
+        fx=args.scale,
+        fy=args.scale,
+        interpolation=cv2.INTER_NEAREST if args.nearest else cv2.INTER_CUBIC,
+    )
+    out = DEBUG_DIR / ("peek_raw.png" if args.nearest else "peek.png")
     cv2.imwrite(str(out), big)
+
+    # Visa vad avlasaren faktiskt tittar pa: vilken fargkanal som valjs och hur
+    # den ser ut. Det ar den bild all tolkning utgar ifran.
+    from display_reader import channel_spreads, pick_channel
+
+    spreads = channel_spreads(crop)
+    gray, chosen = pick_channel(crop, cfg.reader.channel)
+    print("kanaler   : " + "  ".join(f"{name}={value:.0f}" for name, value in spreads.items()))
+    print(f"avlasaren : anvander {chosen!r} (CONTRAST-spann)")
+
+    low, high = float(np.percentile(gray, 2)), float(np.percentile(gray, 99.5))
+    stretched = np.clip((gray - low) * (255.0 / max(1.0, high - low)), 0, 255).astype(np.uint8)
+    gray_big = cv2.resize(
+        stretched,
+        None,
+        fx=args.scale,
+        fy=args.scale,
+        interpolation=cv2.INTER_NEAREST if args.nearest else cv2.INTER_CUBIC,
+    )
+    gray_path = DEBUG_DIR / "peek_channel.png"
+    cv2.imwrite(str(gray_path), gray_big)
+    print(f"kanalbild : {gray_path}")
 
     print(f"bild : {width}x{height} px -> {snapshot_path}")
     print(f"ROI  : {roi}  ({x2 - x1}x{y2 - y1} px)")
@@ -383,6 +467,145 @@ def cmd_mqtt_test(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_image(cfg: Config, args: argparse.Namespace) -> int:
+    """Laser, andrar eller aterstaller kamerans bildinstallningar."""
+    from camera_settings import BACKUP_FILE, ALLOWED, PATTERNS, CameraSettings, CameraSettingsError
+
+    settings = CameraSettings(cfg.camera)
+
+    try:
+        if args.action == "show":
+            for key, value in settings.read().items():
+                allowed = ALLOWED.get(key)
+                hint = f"  (val: {', '.join(allowed)})" if allowed else ""
+                print(f"  {key:<22} {value}{hint}")
+            return 0
+
+        if args.action == "backup":
+            path = settings.backup()
+            print(f"backup sparad -> {path}")
+            return 0
+
+        if args.action == "restore":
+            values = settings.restore()
+            print("aterstallt:")
+            for key, value in values.items():
+                print(f"  {key:<22} {value}")
+            return 0
+
+        if args.action == "set":
+            if not args.changes:
+                print("FEL: ange vad som ska andras, t.ex. gain=30 shutter=1/100")
+                print(f"Giltiga nycklar: {', '.join(PATTERNS)}")
+                return 2
+
+            changes: dict[str, str] = {}
+            for item in args.changes:
+                if "=" not in item:
+                    print(f"FEL: '{item}' ska skrivas nyckel=värde")
+                    return 2
+                key, value = item.split("=", 1)
+                changes[key.strip()] = value.strip()
+
+            if not BACKUP_FILE.exists():
+                settings.backup()
+                print(f"(sparade en backup av nuvarande installningar -> {BACKUP_FILE.name})")
+
+            before = settings.read()
+            print("andrar:")
+            for key, value in changes.items():
+                print(f"  {key:<22} {before.get(key, '?')} -> {value}")
+
+            values = settings.apply(changes)
+            print("\ngaller nu:")
+            for key in changes:
+                print(f"  {key:<22} {values.get(key, '?')}")
+            return 0
+
+        if args.action == "tune":
+            return _tune_exposure(cfg, settings, args)
+
+        print(f"FEL: okant kommando '{args.action}'")
+        return 2
+    except CameraSettingsError as exc:
+        print(f"FEL: {exc}")
+        return 1
+
+
+def _tune_exposure(cfg: Config, settings: object, args: argparse.Namespace) -> int:
+    """Provar olika exponeringar och mater vilken som ger mest lasbar bild.
+
+    Måttet ar avlasarens egen rutnatspoang, alltsa hur val ett sjusegmentsrutnat
+    forklarar bilden. Det ar ett arligare mått an att titta pa kontrast: en hog
+    forstarkning gor siffrorna mattade och "tydliga" i ett histogram, men da
+    smalter de ihop till en enda klass och gar inte att skilja at.
+    """
+    import time
+
+    from camera_settings import CameraSettingsError
+    from display_reader import find_band, fit_grid, preprocess
+
+    if not cfg.calibration_roi:
+        print("FEL: CALIBRATION_ROI maste vara satt i .env for att kunna optimera")
+        return 2
+
+    roi = cfg.calibration_roi
+    digits = cfg.reader.digit_count
+    settings.backup()  # type: ignore[attr-defined]
+    print(f"utgar fran ROI {roi[0]},{roi[1]},{roi[2]},{roi[3]}, {digits} siffror\n")
+
+    gains = (args.gains.split(",") if args.gains else ["10", "20", "40", "60", "80"])
+    shutters = args.shutters.split(",") if args.shutters else ["1/25", "1/60", "1/100"]
+
+    camera = HikvisionCamera(cfg.camera)
+    results: list[tuple[float, str, str, str]] = []
+
+    try:
+        for gain in gains:
+            for shutter in shutters:
+                try:
+                    settings.apply({"gain": gain.strip(), "shutter": shutter.strip()})  # type: ignore[attr-defined]
+                except CameraSettingsError as exc:
+                    print(f"  gain={gain:<4} slutare={shutter:<6} hoppas over: {exc}")
+                    continue
+
+                time.sleep(0.4)  # lat kameran stalla in sig
+                try:
+                    frame = camera.snapshot()
+                except CameraError as exc:
+                    print(f"  gain={gain:<4} slutare={shutter:<6} ingen bild: {exc}")
+                    continue
+
+                try:
+                    normalized, binary = preprocess(frame.image, roi, cfg.reader)
+                    band = find_band(binary)
+                    _boxes, score = fit_grid(normalized, binary, band, digits)
+                except ReaderError as exc:
+                    print(f"  gain={gain:<4} slutare={shutter:<6} kunde inte tolka: {exc}")
+                    continue
+
+                band_size = f"{band[2] - band[0]}x{band[3] - band[1]}"
+                results.append((score, gain.strip(), shutter.strip(), band_size))
+                print(
+                    f"  gain={gain:<4} slutare={shutter:<6} lasbarhet {score:+.3f}"
+                    f"   sifferband {band_size} px"
+                )
+    finally:
+        camera.close()
+
+    if not results:
+        print("FEL: ingen kombination gick att prova")
+        return 1
+
+    results.sort(key=lambda item: item[0], reverse=True)
+    best_score, best_gain, best_shutter, band_size = results[0]
+    print(f"\nbasta: gain={best_gain} slutare={best_shutter} (lasbarhet {best_score:+.3f}, band {band_size} px)")
+
+    settings.apply({"gain": best_gain, "shutter": best_shutter})  # type: ignore[attr-defined]
+    print("installt. Kor 'main.py calibrate --save' for att passa in rutnatet.")
+    return 0
+
+
 def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     from pipeline import NightlyRunner
 
@@ -424,6 +647,8 @@ def build_parser() -> argparse.ArgumentParser:
     cal.add_argument("--roi", help="x1,y1,x2,y2 (annars foreslas ett)")
     cal.add_argument("--digits", type=int, help="antal siffror pa displayen")
     cal.add_argument("--save", action="store_true", help="spara kalibreringen")
+    cal.add_argument("--frames", type=int, default=8, help="antal bilder i tidsstacken")
+    cal.add_argument("--interval", type=float, default=1.0, help="sekunder mellan bilderna")
     cal.set_defaults(func=cmd_calibrate)
 
     read = sub.add_parser("read", help="las displayen nu")
@@ -441,6 +666,11 @@ def build_parser() -> argparse.ArgumentParser:
     peek = sub.add_parser("peek", help="spara ett forstorat utsnitt av displayen")
     peek.add_argument("--roi", help="x1,y1,x2,y2 (annars CALIBRATION_ROI ur .env)")
     peek.add_argument("--scale", type=float, default=4.0, help="forstoring")
+    peek.add_argument(
+        "--nearest",
+        action="store_true",
+        help="visa de rada pixlarna utan utjamning (bra for att bedoma skarpa)",
+    )
     peek.set_defaults(func=cmd_peek)
 
     lamp = sub.add_parser("lamp", help="tanda, slacka eller las av lampan")
@@ -450,6 +680,17 @@ def build_parser() -> argparse.ArgumentParser:
     mqtt = sub.add_parser("mqtt-test", help="publicera ett provvarde till HA")
     mqtt.add_argument("--value", type=int, default=1050)
     mqtt.set_defaults(func=cmd_mqtt_test)
+
+    image = sub.add_parser("image", help="kamerans bildinstallningar")
+    image.add_argument("action", choices=["show", "backup", "set", "restore", "tune"])
+    image.add_argument(
+        "changes",
+        nargs="*",
+        help="for 'set': nyckel=värde, t.ex. gain=30 shutter=1/100 ircut=auto",
+    )
+    image.add_argument("--gains", help="for 'tune': kommaseparerade varden, t.ex. 2,5,10,20")
+    image.add_argument("--shutters", help="for 'tune': kommaseparerade varden, t.ex. 1/50,1/250")
+    image.set_defaults(func=cmd_image)
 
     run = sub.add_parser("run", help="en komplett korning direkt")
     run.add_argument("--seconds", type=float, help="langd pa lasfonstret")

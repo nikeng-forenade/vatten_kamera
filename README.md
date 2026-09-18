@@ -115,6 +115,7 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `main.py read --seconds 20` | Läser displayen nu |
 | `main.py watch` | Följer displayen live som text i terminalen |
 | `main.py lamp on\|off\|state` | Testar lampan via Home Assistant |
+| `main.py image show\|set\|tune\|restore` | Kamerans bildinställningar |
 | `main.py mqtt-test --value 1050` | Publicerar ett provvärde så sensorerna dyker upp i HA |
 | `main.py run` | En komplett körning direkt (lampa, läsning, publicering) |
 | `main.py daemon` | Väntar in klockslaget och kör varje natt |
@@ -163,6 +164,45 @@ Lampan är inte installerad än. När den är på plats:
 2. Testa med `run.cmd main.py lamp on` och `run.cmd main.py lamp off`.
 
 Är `HA_LIGHT_ENTITY` tom körs allt annat som vanligt, men utan belysning.
+
+## Kamerans bildinställningar
+
+Bilden avgör om läsningen lyckas, och kameran har flera inställningar som spelar stor roll.
+Allt kan läsas, ändras och återställas från kommandoraden:
+
+```powershell
+run.cmd main.py image show                    # visa alla inställningar
+run.cmd main.py image set gain=20 shutter=1/100
+run.cmd main.py image tune                    # prova olika exponeringar och välj den bästa
+run.cmd main.py image restore                 # gå tillbaka till utgångsläget
+```
+
+En backup av utgångsläget sparas automatiskt i `camera_settings_backup.json` första gången
+något ändras, så `image restore` kan alltid ta dig tillbaka.
+
+### Tre fynd som gjorde skillnad
+
+| Vad | Varför det spelar roll |
+|---|---|
+| **Dagsläge (`ircut=day`) i stället för nattläge** | Displayen är en röd LED. I svartvitt nattläge brände den ut till en vit klump utan igenkännbara segment. |
+| **Läs blåkanalen, inte gråskala** | Rött ljus har inget blått. I blåkanalen lyser siffrorna medan den röda glöden runt dem blir svart — det ger en ren, skarp bild. Sätts med `COLOR_CHANNEL=b`. |
+| **Hög tröskel (`THRESHOLD=215`)** | Siffrorna är mättade medan spegelbilden i displayglaset är svag. Tröskeln håller spegelbilden borta så att sifferbandet inte blir för högt. |
+
+### Se vad avläsaren ser
+
+```powershell
+run.cmd main.py peek --scale 8 --nearest      # råa pixlar, ingen utjämning
+```
+
+Kommandot skriver också ut vilken färgkanal avläsaren valde och sparar
+`captures/peek_channel.png` — exakt den bild tolkningen utgår ifrån.
+
+## Kända begränsningar
+
+* Avläsaren är en heuristik. Ett testfall är markerat `xfail`: en ljus ram som rör vid
+  ROI:ts kanter kan förskjuta rutnätet. Håll därför ROI:t tätt runt siffrorna.
+* Ligger sifferraden under ~120 px bred i bilden blir läsningen osäker. Se
+  avsnittet om kamerans placering ovan.
 
 ## Drift på servern
 

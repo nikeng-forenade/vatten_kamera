@@ -115,6 +115,57 @@ class Consensus:
 # ---------------------------------------------------------------------------
 
 
+def pick_channel(image: np.ndarray, mode: str) -> tuple[np.ndarray, str]:
+    """Gor om en fargbild till graaskala och tala om vilken kanal som valdes.
+
+    En rod LED-display lyser starkast i den roda kanalen - men gloden runt
+    siffrorna gors ocksa av rodt ljus. Ar gloden problemet ar gron- eller
+    blokanalen battre, for dar lyser siffrorna men inte gloden. Darfor mater vi
+    vilken kanal som har storst skillnad mellan ljust och morkt.
+    """
+    if image.ndim == 2:
+        return image.astype(np.float32), "gray"
+
+    if mode == "gray":
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32), "gray"
+
+    index = {"b": 0, "g": 1, "r": 2}.get(mode)
+    if index is not None:
+        return image[:, :, index].astype(np.float32), mode
+
+    best_channel: np.ndarray | None = None
+    best_name = "gray"
+    best_spread = -1.0
+    for name, channel_index in (("b", 0), ("g", 1), ("r", 2)):
+        if channel_index >= image.shape[2]:
+            continue
+        channel = image[:, :, channel_index].astype(np.float32)
+        spread = float(np.percentile(channel, 99.5) - np.percentile(channel, 10))
+        if spread > best_spread:
+            best_spread = spread
+            best_channel = channel
+            best_name = name
+
+    if best_channel is None:
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32), "gray"
+    return best_channel, best_name
+
+
+def channel_spreads(image: np.ndarray) -> dict[str, float]:
+    """Hur stor ar skillnaden mellan ljust och morkt i varje kanal?"""
+    if image.ndim == 2:
+        return {"gray": float(np.percentile(image, 99.5) - np.percentile(image, 10))}
+
+    spreads: dict[str, float] = {}
+    for name, index in (("b", 0), ("g", 1), ("r", 2)):
+        if index < image.shape[2]:
+            channel = image[:, :, index].astype(np.float32)
+            spreads[name] = float(np.percentile(channel, 99.5) - np.percentile(channel, 10))
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    spreads["gray"] = float(np.percentile(gray, 99.5) - np.percentile(gray, 10))
+    return spreads
+
+
 def preprocess(image: np.ndarray, roi: Box, cfg: ReaderConfig) -> tuple[np.ndarray, np.ndarray]:
     """Returnerar (normaliserad float-bild 0..1, trosklad binarbild) for ROI:t."""
     x1, y1, x2, y2 = roi
@@ -125,7 +176,7 @@ def preprocess(image: np.ndarray, roi: Box, cfg: ReaderConfig) -> tuple[np.ndarr
         raise ReaderError(f"ROI {roi} ligger utanfor bilden {w}x{h}")
 
     crop = image[y1:y2, x1:x2]
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    gray, _channel_name = pick_channel(crop, getattr(cfg, "channel", "auto"))
 
     if cfg.clip_bottom > 0:
         cut = int(round(gray.shape[0] * cfg.clip_bottom))
@@ -165,7 +216,54 @@ def preprocess(image: np.ndarray, roi: Box, cfg: ReaderConfig) -> tuple[np.ndarr
         kernel = np.ones((cfg.close_kernel, cfg.close_kernel), np.uint8)
         binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
+    # Rensa bort decimalpunkten och stora ljusa ytor redan har, sa att alla steg
+    # som utgar fran den binara bilden ser samma sak.
+    binary = clean_binary(binary)
+
     return normalized, binary
+
+
+def clean_binary(
+    binary: np.ndarray,
+    min_height_ratio: float = 0.20,
+    min_width_ratio: float = 0.12,
+    max_area_fraction: float = 0.30,
+) -> np.ndarray:
+    """Rensar den trosklade bilden sa att bara siffersegmenten blir kvar.
+
+    Tva slags skrap stor tolken:
+      * decimalpunkten - den lyser som en siffra men ar liten, och gor att
+        sifferbandet blir bredare an siffrorna sa delningen inte stämmer,
+      * pumphuset och andra stora ljusa ytor - de ar for stora for att vara
+        siffror och drar ut bandet over hela bilden.
+
+    En prick maste vara liten i BADE bredd och hojd for att rensas. De vagrata
+    segmenten i en siffra ar ocksa lave men breda, och maste vara kvar.
+    """
+    if binary.size == 0:
+        return binary
+
+    height, width = binary.shape[:2]
+    roi_area = float(height * width)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    mask = np.zeros_like(binary)
+
+    for label in range(1, count):
+        _x, _y, component_width, component_height, area = stats[label]
+        if area < 6:
+            continue
+        if area > max_area_fraction * roi_area:
+            continue
+        if component_width > 0.85 * width and component_height > 0.85 * height:
+            continue
+        if (
+            component_height < min_height_ratio * height
+            and component_width < min_height_ratio * height
+        ):
+            continue
+        mask[labels == label] = 255
+
+    return mask
 
 
 def find_band(binary: np.ndarray) -> Box:
@@ -182,6 +280,10 @@ def find_band(binary: np.ndarray) -> Box:
     h, w = binary.shape[:2]
     if h == 0 or w == 0:
         raise ReaderError("tomt ROI")
+
+    # Decimalpunkten lyser men ar mycket lavere an siffrorna, och ska inte
+    # vara med och bestamma var sifferbandet borjar och slutar.
+    binary = clean_binary(binary)
 
     roi_area = float(h * w)
     count, _, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
@@ -282,10 +384,6 @@ def fit_grid(
     span = max(1, bx2 - bx1)
     base_pitch = span / float(digit_count)
 
-    band_rows = binary[by1:by2, :]
-    lit_per_column = np.count_nonzero(band_rows, axis=0).astype(np.float64)
-    total_lit = float(lit_per_column.sum())
-
     def cells_for(pitch: float, width: float, left0: float) -> list[Box] | None:
         boxes: list[Box] = []
         for index in range(digit_count):
@@ -298,32 +396,8 @@ def fit_grid(
             boxes.append((cx1, by1, cx2, by2))
         return boxes
 
-    def unexplained_lit(boxes: list[Box]) -> float:
-        """Andel tta pixlar som hamnar utanfor alla celler."""
-        if total_lit <= 0:
-            return 0.0
-        covered = np.zeros(img_w, dtype=bool)
-        for cx1, _, cx2, _ in boxes:
-            covered[cx1:cx2] = True
-        outside = float(lit_per_column[~covered].sum())
-        return outside / total_lit
-
     def score_of(boxes: list[Box]) -> float:
-        scores: list[float] = []
-        for cx1, cy1, cx2, cy2 in boxes:
-            cell = normalized[cy1:cy2, cx1:cx2]
-            if cell.size == 0:
-                return -1.0
-            result = decode_cell(cell)
-            # En tom cell ar tillaten (inledande nolla kan vara slackt) men
-            # ska vaga latt, sa ett rutnat med riktiga siffror foredras.
-            scores.append(0.15 if result.blank else result.confidence)
-
-        return (
-            float(np.mean(scores))
-            - 0.6 * _boundary_penalty(binary, boxes)
-            - 0.6 * unexplained_lit(boxes)
-        )
+        return score_boxes(normalized, binary, band, boxes)
 
     best_score = -3.0
     best_boxes: list[Box] = []
@@ -358,6 +432,120 @@ def fit_grid(
     return best_boxes, best_score
 
 
+def score_boxes(normalized: np.ndarray, binary: np.ndarray, band: Box, boxes: list[Box]) -> float:
+    """Hur bra forklarar detta rutnat bilden? Hogre ar battre.
+
+    Vi vager samman tre saker:
+      * hur saker tolken ar pa varje siffra,
+      * att cellernas granser inte skar genom tta segment,
+      * att inga tta pixlar lamnas utanfor rutnatet.
+    """
+    bx1, by1, bx2, by2 = band
+    band_rows = binary[by1:by2, :]
+    lit_per_column = np.count_nonzero(band_rows, axis=0).astype(np.float64)
+    total_lit = float(lit_per_column.sum())
+    width = lit_per_column.shape[0]
+
+    scores: list[float] = []
+    for cx1, cy1, cx2, cy2 in boxes:
+        cell = normalized[cy1:cy2, cx1:cx2]
+        if cell.size == 0:
+            return -3.0
+        result = decode_cell(cell)
+        # En tom cell ar tillaten (en slackt siffra) men ska vaga latt.
+        scores.append(0.15 if result.blank else result.confidence)
+
+    penalty = 0.6 * _boundary_penalty(binary, boxes)
+
+    if total_lit > 0:
+        covered = np.zeros(width, dtype=bool)
+        for cx1, _, cx2, _ in boxes:
+            covered[max(0, cx1) : min(width, cx2)] = True
+        penalty += 0.6 * (float(lit_per_column[~covered].sum()) / total_lit)
+
+    return float(np.mean(scores)) - penalty
+
+
+def detect_cells(normalized: np.ndarray, binary: np.ndarray, band: Box, digit_count: int) -> list[Box] | None:
+    """Hittar siffercellerna genom att utga fran mellanrummen mellan siffrorna.
+
+    Mellan tva siffror pa en sjusegmentsdisplay finns en mork lucka. Vi delar
+    bandet jamnt och knapper sedan varje intern cellgrans till den morkaste
+    kolumnen i narheten - alltsa precis dar luckan sitter. Varje siffra far
+    sedan en tat cell runt sina egna tta pixlar, sa att segmentens samplingsrutor
+    hamnar pa segmenten och inte pa tomrum.
+
+    Att leta upp luckorna ar sakerrare an att gissa cellbredder: en felbredd pa
+    en pixel vandrar ivag over hela raden och gor att sista siffran hamnar fel.
+    """
+    x1, y1, x2, y2 = band
+    if x2 - x1 < digit_count * 3 or y2 <= y1:
+        return None
+
+    # Decimalpunkten ska inte vara med och bestamma delningen.
+    digits_only = clean_binary(binary)
+    rows = digits_only[y1:y2, :]
+    if rows.size == 0 or np.count_nonzero(rows) == 0:
+        rows = binary[y1:y2, :]
+    if rows.size == 0:
+        return None
+
+    # Hur manga tta pixlar finns i varje kolumn?
+    profile = rows.sum(axis=0).astype(np.float64)
+
+    pitch = (x2 - x1) / float(digit_count)
+    bounds = [float(x1 + index * pitch) for index in range(digit_count + 1)]
+    search = max(1, int(pitch * 0.35))
+
+    for index in range(1, digit_count):
+        low = int(max(0, bounds[index] - search))
+        high = int(min(len(profile), bounds[index] + search + 1))
+        if high <= low:
+            continue
+        bounds[index] = float(low + int(np.argmin(profile[low:high])))
+
+    cells: list[Box] = []
+    for index in range(digit_count):
+        slot_left = int(np.floor(bounds[index]))
+        slot_right = int(np.ceil(bounds[index + 1]))
+        slot_left = max(0, min(slot_left, len(profile) - 1))
+        slot_right = max(slot_left + 1, min(slot_right, len(profile)))
+        if slot_right <= slot_left:
+            return None
+
+        sub = digits_only[y1:y2, slot_left:slot_right]
+        columns = np.flatnonzero(sub.sum(axis=0) > 0)
+        if columns.size == 0:
+            # Siffran ar slackt just nu - behall hela platsen.
+            cells.append((slot_left, y1, slot_right, y2))
+            continue
+
+        left = slot_left + int(columns[0])
+        right = slot_left + int(columns[-1]) + 1
+        if right <= left:
+            right = left + 1
+        cells.append((left, y1, right, y2))
+
+    # Rimlighetskontroll: cellerna ska ha liknande bredd och tacka det mesta av
+    # det tta innehaller.
+    widths = [cell[2] - cell[0] for cell in cells]
+    if min(widths) < 2:
+        return None
+    median_width = float(np.median(widths))
+    if max(widths) > 2.0 * median_width:
+        return None
+
+    lit_total = float(np.count_nonzero(digits_only[y1:y2, x1:x2]))
+    if lit_total > 0:
+        covered = 0.0
+        for cell in cells:
+            covered += float(np.count_nonzero(digits_only[y1:y2, cell[0] : cell[2]]))
+        if covered < 0.85 * lit_total:
+            return None
+
+    return cells
+
+
 def read_image(
     image: np.ndarray,
     cal: Calibration,
@@ -382,6 +570,9 @@ def read_image(
         ]
     else:
         band = find_band(binary)
+        # Rutnatet passas in en gang och sparas i kalibreringen. Sedan laser vi
+        # med de sparade cellerna, sa att sjalva lasningen ar snabb och inte
+        # behover gissa om indelningen.
         boxes, _grid_score = fit_grid(normalized, binary, band, cal.digit_count)
 
         # Rutnatet sitter fast sa lange kameran star still, sa vi kommer i hag
@@ -448,6 +639,109 @@ def consensus(
     confidence = float(np.mean([r.confidence for r in agreeing]))
 
     return Consensus(value=value, votes=count, total=len(readings), confidence=confidence)
+
+
+# ---------------------------------------------------------------------------
+# Medelvardesbildning over flera bilder
+# ---------------------------------------------------------------------------
+#
+# Siffrorna ar sma, sa en enstaka bild ar kanslig for sensorns brus. Vardet star
+# stilla i 10-12 sekunder, sa vi kan lagga ihop de bilder som visar samma sak
+# och tolka summan i stallet. Bruset ar slumpmassigt och vags ut, medan
+# siffrorna ar oforandrade och star kvar. Det ger betydligt sakrare lasningar
+# av sma siffror.
+
+
+def crop_roi(image: np.ndarray, roi: Box, channel: str = "auto") -> np.ndarray:
+    """Skalar av ROI:t fran en bild och gor det till en graaskala i float."""
+    x1, y1, x2, y2 = roi
+    h, w = image.shape[:2]
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(w, x2), min(h, y2)
+    if x2 <= x1 or y2 <= y1:
+        raise ReaderError(f"ROI {roi} ligger utanfor bilden {w}x{h}")
+
+    return pick_channel(image[y1:y2, x1:x2], channel)[0]
+
+
+def group_similar(crops: list[np.ndarray], threshold: float = 8.0) -> list[list[int]]:
+    """Delar in bilderna i grupper dar gruppens bilder visar samma sak.
+
+    Bilderna jamfors med den senaste gruppens medelvarde. Nar displayen byter
+    varde blir skillnaden stor och en ny grupp startas. Pa sa vis blandas aldrig
+    tva olika varden ihop.
+
+    Jamforelsen gors pa utjamnade bilder. Sensorbrus ar slumpmassigt och forsvinner
+    vid utjamningen, medan ett vardebyte andrar ett helt segment och star kvar.
+    Utan det skulle bruset ensamt kunna se ut som ett vardebyte, och da blir
+    varje bild sin egen grupp utan att nagon medelvardesbildning sker.
+    """
+    groups: list[list[int]] = []
+
+    # Utjamning for jamforelsen - inte for sjalva tolkningen.
+    smoothed = [
+        cv2.GaussianBlur(crop, (0, 0), 1.5) if crop.ndim == 2 else crop for crop in crops
+    ]
+
+    for index, crop in enumerate(smoothed):
+        if not groups or crop.shape != smoothed[groups[-1][0]].shape:
+            groups.append([index])
+            continue
+
+        current = (
+            smoothed[groups[-1][0]]
+            if len(groups[-1]) == 1
+            else np.mean([smoothed[i] for i in groups[-1]], axis=0)
+        )
+        difference = float(np.mean(np.abs(crop - current)))
+        if difference <= threshold:
+            groups[-1].append(index)
+        else:
+            groups.append([index])
+
+    return groups
+
+
+def average_crops(crops: list[np.ndarray], indices: list[int]) -> np.ndarray:
+    """Medelvardet av de valda bilderna."""
+    if len(indices) == 1:
+        return crops[indices[0]]
+    return np.mean([crops[i] for i in indices], axis=0)
+
+
+def image_from_crop(crop: np.ndarray, roi: Box) -> np.ndarray:
+    """Bygger en bild dar utsnittet ligger pa ROI:ts plats, sa att kalibreringen passar."""
+    _, _, x2, y2 = roi
+    canvas = np.zeros((max(1, y2), max(1, x2), 3), dtype=np.uint8)
+    canvas[roi[1] : roi[1] + crop.shape[0], roi[0] : roi[0] + crop.shape[1]] = cv2.cvtColor(
+        np.clip(crop, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR
+    )
+    return canvas
+
+
+def read_crops(
+    crops: list[np.ndarray],
+    cal: Calibration,
+    cfg: ReaderConfig,
+    *,
+    threshold: float = 8.0,
+    min_frames: int = 1,
+) -> list[Reading]:
+    """Tolkar en serie utsnitt, med medelvardesbildning inom varje grupp."""
+    if not crops:
+        return []
+
+    readings: list[Reading] = []
+
+    for indices in group_similar(crops, threshold):
+        if len(indices) < min_frames:
+            continue
+        averaged = average_crops(crops, indices)
+        image = image_from_crop(averaged, cal.roi)
+        reading = read_image(image, cal, cfg, timestamp=float(len(indices)))
+        readings.append(reading)
+
+    return readings
 
 
 def save_debug(

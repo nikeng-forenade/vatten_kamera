@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import numpy as np
 
 from camera import CameraError, HikvisionCamera
 from config import ROOT, VERSION, Config, load_config
@@ -22,7 +25,11 @@ from display_reader import (
     Consensus,
     Reading,
     ReaderError,
+    average_crops,
     consensus,
+    crop_roi,
+    group_similar,
+    image_from_crop,
     read_image,
 )
 from ha_client import HaError, HomeAssistant
@@ -61,6 +68,8 @@ class NightlyRunner:
         self.ha = HomeAssistant(cfg.ha)
         self.mqtt = MqttPublisher(cfg.mqtt)
         self.calibration = Calibration.load(cfg.calibration_file)
+        # Hur olika tva bilder far vara for att anses visa samma varde.
+        self.similarity_threshold = cfg.run.group_threshold
 
     # --- Tid ---------------------------------------------------------------
 
@@ -97,18 +106,24 @@ class NightlyRunner:
         duration_s: float,
         frames_dir: Path | None,
     ) -> tuple[list[Reading], list[tuple[Reading, Path]]]:
-        """Tar bilder under `duration_s` och tolkar var och en."""
+        """Tar bilder under `duration_s`, vager samman lika bilder och tolkar dem.
+
+        Siffrorna ar sma, sa en enstaka bild ar kanslig for sensorns brus. Vi
+        samlar darfor alla utsnitt forst, laggar ihop de som visar samma varde
+        och tolkar medelvardesbilden. Bruset vags ut medan siffrorna star kvar.
+        """
         cfg = self.cfg.run
         reader_cfg = self.cfg.reader
 
-        readings: list[Reading] = []
-        saved: list[tuple[Reading, Path]] = []
+        crops: list[np.ndarray] = []
+        jpegs: list[bytes | None] = []
         deadline = time.time() + duration_s
         index = 0
 
         while time.time() < deadline:
             frame_started = time.time()
             index += 1
+
             try:
                 frame = self.camera.snapshot()
             except CameraError as exc:
@@ -117,29 +132,58 @@ class NightlyRunner:
                 continue
 
             try:
-                reading = read_image(frame.image, self.calibration, reader_cfg, timestamp=frame.timestamp)
+                crop = crop_roi(frame.image, self.calibration.roi, reader_cfg.channel)
             except ReaderError as exc:
-                log.warning("kunde inte tolka bild %d: %s", index, exc)
+                log.warning("kunde inte lasa ut ROI ur bild %d: %s", index, exc)
                 time.sleep(max(0.0, cfg.interval_s - (time.time() - frame_started)))
                 continue
 
+            crops.append(crop)
+            jpegs.append(frame.jpeg if (frames_dir is not None and cfg.save_frames) else None)
+            log.debug("bild %d tagen", index)
+
+            time.sleep(max(0.0, cfg.interval_s - (time.time() - frame_started)))
+
+        if not crops:
+            return [], []
+
+        groups = group_similar(crops, self.similarity_threshold)
+        log.info("%d bilder i %d grupper (varden som visar samma sak vags samman)",
+                 len(crops), len(groups))
+
+        readings: list[Reading] = []
+        saved: list[tuple[Reading, Path]] = []
+
+        for group_number, indices in enumerate(groups, start=1):
+            averaged = average_crops(crops, indices)
+            reading = read_image(
+                image_from_crop(averaged, self.calibration.roi),
+                self.calibration,
+                reader_cfg,
+                timestamp=float(len(indices)),
+            )
             readings.append(reading)
 
             if reading.ok:
                 log.info(
-                    "bild %d: %r konfidens %.2f", index, reading.value, reading.confidence
+                    "grupp %d (%d bilder): %r konfidens %.2f",
+                    group_number, len(indices), reading.value, reading.confidence,
                 )
             else:
-                log.debug("bild %d: inget varde", index)
+                log.info("grupp %d (%d bilder): inget varde", group_number, len(indices))
 
             if frames_dir is not None and cfg.save_frames:
                 if not cfg.save_only_success or reading.ok:
-                    frames_dir.mkdir(parents=True, exist_ok=True)
-                    path = frames_dir / f"{index:03d}_{datetime.now():%H%M%S}_{reading.value or 'x'}.jpg"
-                    path.write_bytes(frame.jpeg)
-                    saved.append((reading, path))
-
-            time.sleep(max(0.0, cfg.interval_s - (time.time() - frame_started)))
+                    middle = indices[len(indices) // 2]
+                    payload = jpegs[middle]
+                    if payload:
+                        frames_dir.mkdir(parents=True, exist_ok=True)
+                        path = frames_dir / (
+                            f"grupp{group_number:02d}_{len(indices)}bilder_"
+                            f"{_safe_name(reading.value)}.jpg"
+                        )
+                        path.write_bytes(payload)
+                        saved.append((reading, path))
 
         return readings, saved
 
@@ -267,6 +311,16 @@ class NightlyRunner:
             # Sov vidare till strax efter att korningen borde vara slut.
             next_target = self.next_run_time()
             self.wait_until(next_target - timedelta(seconds=self.cfg.run.pre_start_s))
+
+
+def _safe_name(value: str | None) -> str:
+    """Gor om ett last varde till nagot som gar att anvanda i ett filnamn.
+
+    Windows tillater inte tecken som '?' och ':' i filnamn, och ett osakert
+    varde kan innehalla precis vad som helst.
+    """
+    cleaned = re.sub(r"[^0-9A-Za-z._-]", "", value or "")
+    return cleaned or "x"
 
 
 def _failure_reason(readings: list[Reading], min_confidence: float) -> str:
