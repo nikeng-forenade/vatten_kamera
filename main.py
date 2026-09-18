@@ -333,6 +333,15 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
     print(f"segmentrutor -> {segments_path}  (gron = lyser, rod = slackt)")
 
     if args.save:
+        # Spara samma normaliserade ROI-bild som avlasaren ser, sa att varje
+        # senare bildruta kan riktas in mot den innan cellerna anvands. Det gor
+        # lasningen okanslig for att kameran rubbas nagra pixel.
+        from display_reader import REFERENCE_FILE, save_reference
+
+        reference_path = cfg.calibration_file.with_name(REFERENCE_FILE)
+        save_reference(normalized, str(reference_path))
+        print(f"referensbild    -> {reference_path}")
+
         cfg.calibration_file.write_text(
             json.dumps(
                 {

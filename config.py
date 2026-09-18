@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.5.3"
+VERSION = "0.6.0"
 
 ROOT = Path(__file__).resolve().parent
 CALIBRATION_FILE = ROOT / "calibration.json"
@@ -156,6 +156,7 @@ class ReaderConfig:
     # nolla (som i 0.50) sa betyder en slackt siffra att tolkningen hamnat fel.
     require_all_digits: bool = True
     require_blank_first: bool = False
+    reference_file: str = ""
     # Vilken fargkanal som blir graaskala: "auto", "gray", "r", "g" eller "b".
     # En rod LED-display lyser starkast i rodkanalen, sa "auto" valjer den kanal
     # som har storst kontrast - det ger flera ganger battre skillnad an graaskala.
@@ -239,6 +240,7 @@ def load_config() -> Config:
         decimals=_get_int("DECIMALS", 0),
         require_all_digits=_get_bool("REQUIRE_ALL_DIGITS", True),
         require_blank_first=_get_bool("REQUIRE_BLANK_FIRST", False),
+        reference_file=_get("REFERENCE_FILE", ""),
         channel=_get("COLOR_CHANNEL", "auto"),
         upscale=_get_float("UPSCALE", 5.0),
         normalize=_get_bool("NORMALIZE", True),

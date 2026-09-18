@@ -607,6 +607,48 @@ def detect_cells(normalized: np.ndarray, binary: np.ndarray, band: Box, digit_co
     return cells
 
 
+REFERENCE_FILE = "calibration_reference.png"
+
+# Storsta forskjutning som vi tror pa. Ar bilden mer forskjuten an sa har
+# kameran flyttats ordentligt och da ar de sparade cellerna anda fel.
+MAX_ALIGN_SHIFT = 60.0
+# phaseCorrelate:s svar. Lagt varde betyder att bilderna inte liknar varandra,
+# t.ex. for att displayen visar nagot helt annat, och da ska vi inte flytta.
+MIN_ALIGN_RESPONSE = 0.05
+
+
+def estimate_shift(reference: np.ndarray, current: np.ndarray) -> tuple[float, float, float]:
+    """Uppskattar hur mycket `current` ar forskjuten mot `reference`.
+
+    Returnerar (dx, dy, svar). Bara translation, vilket racker nar kameran
+    sitter fast och bara rubbas nagra pixel. Phase correlation ar snabb och
+    itererar inte, till skillnad fran ECC.
+    """
+    if reference.shape != current.shape:
+        return 0.0, 0.0, 0.0
+    first = np.ascontiguousarray(reference, dtype=np.float32)
+    second = np.ascontiguousarray(current, dtype=np.float32)
+    # Ett fonster dampa kantartefakterna, annars ger de en falsk topp.
+    window = cv2.createHanningWindow((first.shape[1], first.shape[0]), cv2.CV_32F)
+    (dx, dy), response = cv2.phaseCorrelate(first, second, window)
+    return float(dx), float(dy), float(response)
+
+
+def load_reference(path: str | None) -> np.ndarray | None:
+    """Laser referensbilden som float 0..1. None om den inte finns."""
+    if not path:
+        return None
+    image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        return None
+    return image.astype(np.float32) / 255.0
+
+
+def save_reference(normalized: np.ndarray, path: str) -> None:
+    """Sparar den normaliserade ROI-bilden som referens for inriktningen."""
+    cv2.imwrite(str(path), np.clip(normalized * 255.0, 0.0, 255.0).astype("uint8"))
+
+
 def read_image(
     image: np.ndarray,
     cal: Calibration,
@@ -616,6 +658,27 @@ def read_image(
 ) -> Reading:
     """Laser displayen i en bild och returnerar varde + konfidens."""
     normalized, binary = preprocess(image, cal.roi, cfg)
+
+    # Rikta in bilden mot referensen innan cellerna anvands. Kameran sitter
+    # fast, men vibrationer och temperaturdrift flyttar bilden nagra pixel over
+    # tid, och da hamnar de sju matfonstren fel. Referensen sparas vid
+    # kalibreringen och ar samma normaliserade ROI-bild som vi jamfor med har.
+    offset = (0, 0)
+    reference = load_reference(getattr(cfg, "reference_file", ""))
+    if reference is not None and reference.shape == normalized.shape:
+        dx, dy, response = estimate_shift(reference, normalized)
+        if response >= MIN_ALIGN_RESPONSE and (abs(dx) > 0.5 or abs(dy) > 0.5):
+            if abs(dx) <= MAX_ALIGN_SHIFT and abs(dy) <= MAX_ALIGN_SHIFT:
+                offset = (int(round(dx)), int(round(dy)))
+                log.debug("bilden ar forskjuten %s mot referensen - cellerna foljer med", offset)
+            else:
+                log.warning(
+                    "bilden ar forskjuten %.0f, %.0f px mot referensen, mer an gransen"
+                    " %.0f px - laser med de sparade cellerna",
+                    dx,
+                    dy,
+                    MAX_ALIGN_SHIFT,
+                )
 
     if cal.cell_boxes:
         scale = cfg.upscale if cfg.upscale else 1.0
@@ -650,6 +713,12 @@ def read_image(
             for bx1, by1, bx2, by2 in boxes
         ]
         log.debug("rutnat inpassat: %s", cal.cell_boxes)
+
+    if offset != (0, 0):
+        boxes = [
+            (bx1 + offset[0], by1 + offset[1], bx2 + offset[0], by2 + offset[1])
+            for bx1, by1, bx2, by2 in boxes
+        ]
 
     digits: list[DecodeResult] = []
     chars: list[str] = []
