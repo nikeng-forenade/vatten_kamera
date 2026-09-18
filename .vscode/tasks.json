@@ -353,6 +353,21 @@
 			"args": [],
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Sänk exponeringen",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"image",
+				"set",
+				"ircut=night",
+				"gain=20",
+				"shutter=1/250"
+			],
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }

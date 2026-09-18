@@ -232,19 +232,46 @@ run.cmd main.py peek --scale 8 --nearest      # råa pixlar, ingen utjämning
 Kommandot skriver också ut vilken färgkanal avläsaren valde och sparar
 `captures/peek_channel.png` — exakt den bild tolkningen utgår ifrån.
 
-## Verifierat mot displayen
+## Displayen
 
-Avläsningen är kontrollerad mot ett **känt värde**: displayen visar sin egen klocka, och
-avläsaren fick ut samma siffror som står på displayen.
+Displayen är en **självlysande röd LED med tre siffror**, plus kolon och decimalpunkt.
+Kolonet används när den visar sin egen klocka (`5:28`), punkten när den visar ett värde
+(`1.22`, `0.50`). Panelens tryckta legend `88.8` visar samma sak: tre siffror med punkt.
 
-| Vad | Resultat |
+Sifferpositionerna mättes upp i en verklig bild:
+
+| Siffra | x-position i bilden |
 |---|---|
-| Bilden visade | `15:28` (displayens klocka, som går några minuter efter) |
-| Avläsaren gav | `1528` |
-| Slutsats | Rätt siffror, och kolonet och punkten ignoreras korrekt |
+| 1 | 1126–1203 |
+| 2 | 1234–1332 |
+| 3 | 1351–1448 |
 
-Det verifierar hela kedjan: kameran, bildbehandlingen, segmenttolkningen och
-cellerkänningen. Sifferraden ska vara minst ~120 px bred — är den mindre går det inte.
+Sifferraden är ~320 px bred och siffrorna ~120 px höga. Det är gott om marginal —
+kravet är minst ~120 px för hela raden.
+
+Använd `tools/measure_display.py` för att mäta om detta om kameran flyttas:
+
+```powershell
+run.cmd tools/measure_display.py captures\last_snapshot.jpg
+```
+
+Den skriver ut kolumnprofilen som siffror i stället för att man ska gissa ur en bild.
+Det var så sifferantalet fastställdes.
+
+## Verifierat och inte verifierat
+
+**Verifierat:** kameravägen (snapshot i full upplösning), bildbehandlingen, och att
+segmenttolkningen läser **rätt siffror** ur en verklig bild. Avläsaren fick ut `5`, `2`
+och `8` korrekt ur en bild där displayens klocka visade `5:28`.
+
+**Inte verifierat:** att kalibreringen sitter stabilt över tid. Displayen växlar mellan
+många olika vyer, och ett fast rutnät som passar en vy passar inte alltid nästa. Vid en
+testkörning läste den `888` i kalibreringsbilden men gav osäkra värden i de följande
+bilderna. **Värdet från 02:00 går därför inte att lita på ännu.**
+
+Nästa steg är att låsa tidpunkten 02:00 mot displayens faktiska växling — antingen genom
+att se vad displayen visar precis då, eller genom att styra kameran mot en vy som står
+stilla tillräckligt länge.
 
 ## Kända begränsningar
 

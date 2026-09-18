@@ -227,11 +227,18 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
     # sitta och passa in ROI:t for hand, och tolkningen blir sakrare nar varken
     # tomt morker eller pumphus kommer med.
     tightened = _tighten_roi(roi, band, cfg, (height, width))
-    if tightened != roi:
+    # Bara om utsnittet ar mycket storre an sjalva siffrorna. Ar det redan natt
+    # och tight ar en atstramning bara riskabel - den kan skara bort siffror.
+    band_scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
+    band_area = max(1.0, float((band[2] - band[0]) * (band[3] - band[1])))
+    roi_area = max(1.0, float((roi[2] - roi[0]) * (roi[3] - roi[1]))) * band_scale * band_scale
+    if tightened != roi and band_area < 0.45 * roi_area:
         print(f"drar at utsnittet: {roi} -> {tightened}")
         roi = tightened
         normalized, binary = preprocess(analysis_image, roi, cfg.reader)
         band = find_band(binary)
+    else:
+        print("utsnittet ar redan tight - behaller det")
 
     detected = detect_cells(normalized, binary, band, digits)
     if detected is not None:
