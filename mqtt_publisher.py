@@ -105,12 +105,11 @@ class MqttPublisher:
         availability = self._topic("availability")
 
         sensor_config: dict[str, Any] = {
-            "name": "Liter kvar innan spolning",
-            "unique_id": f"{OBJECT_ID}_liter_kvar",
-            "object_id": f"{OBJECT_ID}_liter_kvar",
+            "name": "Varde",
+            "unique_id": f"{OBJECT_ID}_varde",
+            "object_id": f"{OBJECT_ID}_varde",
             "state_topic": self._topic("state"),
             "json_attributes_topic": self._topic("attributes"),
-            "unit_of_measurement": "l",
             "icon": "mdi:water",
             "state_class": "measurement",
             "availability_topic": availability,
@@ -118,6 +117,8 @@ class MqttPublisher:
             "payload_not_available": "offline",
             "device": self._device_block(),
         }
+        if self.cfg.unit:
+            sensor_config["unit_of_measurement"] = self.cfg.unit
 
         status_config: dict[str, Any] = {
             "name": "Senaste lasning lyckades",
@@ -135,7 +136,7 @@ class MqttPublisher:
         }
 
         prefix = self.cfg.discovery_prefix
-        self._publish(f"{prefix}/sensor/{OBJECT_ID}_liter_kvar/config", json.dumps(sensor_config))
+        self._publish(f"{prefix}/sensor/{OBJECT_ID}_varde/config", json.dumps(sensor_config))
         self._publish(f"{prefix}/binary_sensor/{OBJECT_ID}_lasning_ok/config", json.dumps(status_config))
         log.info("discovery publicerad under %s/", prefix)
 

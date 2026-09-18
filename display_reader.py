@@ -79,14 +79,16 @@ class Reading:
     boxes: list[Box]
     ok: bool = True
     error: str = ""
+    # Antal decimaler i vardet, sa att "122" blir 1.22.
+    decimals: int = 0
 
     @property
     def numeric(self) -> float | None:
-        """Vardet som tal, utan separatorer. None om inget varde las gick."""
+        """Vardet som tal. "122" med tva decimaler blir 1.22."""
         digits_only = "".join(ch for ch in self.value if ch.isdigit())
         if not digits_only:
             return None
-        return float(digits_only)
+        return int(digits_only) / (10.0**self.decimals)
 
 
 @dataclass
@@ -97,13 +99,14 @@ class Consensus:
     votes: int
     total: int
     confidence: float
+    decimals: int = 0
 
     @property
     def numeric(self) -> float | None:
-        if not self.value:
+        digits_only = "".join(ch for ch in self.value if ch.isdigit()) if self.value else ""
+        if not digits_only:
             return None
-        digits_only = "".join(ch for ch in self.value if ch.isdigit())
-        return float(digits_only) if digits_only else None
+        return int(digits_only) / (10.0**self.decimals)
 
     @property
     def ok(self) -> bool:
@@ -609,6 +612,11 @@ def read_image(
     confident = [d.confidence for d in digits if not d.blank]
     confidence = float(min(confident)) if confident else 0.0
 
+    # Visar displayen alltid alla siffror (som i 0.50) sa betyder en slackt
+    # position att rutnatet hamnat fel. Da ska lasningen inte kunna rostas fram.
+    if getattr(cfg, "require_all_digits", True) and any(d.blank for d in digits):
+        confidence = 0.0
+
     return Reading(
         value=value,
         confidence=confidence,
@@ -616,6 +624,7 @@ def read_image(
         timestamp=timestamp,
         boxes=boxes,
         ok=bool(value),
+        decimals=getattr(cfg, "decimals", 0),
     )
 
 
@@ -624,21 +633,26 @@ def consensus(
     *,
     min_agreement: int = 3,
     min_confidence: float = 0.75,
+    decimals: int = 0,
 ) -> Consensus:
     """Rostar fram det varde som flest lasningar ar eniga om."""
     usable = [r for r in readings if r.ok and r.confidence >= min_confidence and r.value]
     if not usable:
-        return Consensus(value=None, votes=0, total=len(readings), confidence=0.0)
+        return Consensus(value=None, votes=0, total=len(readings), confidence=0.0, decimals=decimals)
 
     votes = Counter(r.value for r in usable)
     value, count = votes.most_common(1)[0]
     if count < min_agreement:
-        return Consensus(value=None, votes=count, total=len(readings), confidence=0.0)
+        return Consensus(
+            value=None, votes=count, total=len(readings), confidence=0.0, decimals=decimals
+        )
 
     agreeing = [r for r in usable if r.value == value]
     confidence = float(np.mean([r.confidence for r in agreeing]))
 
-    return Consensus(value=value, votes=count, total=len(readings), confidence=confidence)
+    return Consensus(
+        value=value, votes=count, total=len(readings), confidence=confidence, decimals=decimals
+    )
 
 
 # ---------------------------------------------------------------------------

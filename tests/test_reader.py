@@ -181,6 +181,56 @@ def test_graaskala_fungerar_fortfarande() -> None:
     assert reading.value == "1050"
 
 
+def test_vardet_tolkas_med_decimaler() -> None:
+    # Displayen visar 1.22 och 0.50 - tre siffror med tva decimaler. Siffrorna
+    # 122 ska alltsa bli 1.22 och inte 122.
+    cfg = ReaderConfig(digit_count=3, upscale=1.0, decimals=2)
+    canvas, _ = render_number("122", digit_width=60, digit_height=110)
+    img = to_bgr(canvas)
+    height, width = img.shape[:2]
+
+    cal = Calibration(roi=(0, 0, width, height), digit_count=3)
+    reading = read_image(img, cal, cfg)
+
+    assert reading.value == "122"
+    assert reading.numeric == 1.22, f"blev {reading.numeric}"
+
+    result = consensus([reading] * 3, min_agreement=3, decimals=2)
+    assert result.numeric == 1.22
+
+
+def test_ledande_nolla_ger_ratt_varde() -> None:
+    # 0.50 visas med ledande nolla, alltsa lyser alla tre siffrorna.
+    cfg = ReaderConfig(digit_count=3, upscale=1.0, decimals=2)
+    canvas, _ = render_number("050", digit_width=60, digit_height=110)
+    img = to_bgr(canvas)
+    height, width = img.shape[:2]
+
+    cal = Calibration(roi=(0, 0, width, height), digit_count=3)
+    reading = read_image(img, cal, cfg)
+
+    assert reading.value == "050"
+    assert reading.numeric == 0.50
+
+
+def test_slackt_siffra_godkanns_inte_nar_alla_ska_lysa() -> None:
+    # Lyser bara tva av tre siffror har rutnatet hamnat fel - lasningen ska inte
+    # kunna rostas fram hur saker den an verkar vara.
+    canvas, _ = render_number("1 2", digit_width=60, digit_height=110)
+    img = to_bgr(canvas)
+    height, width = img.shape[:2]
+
+    cal = Calibration(roi=(0, 0, width, height), digit_count=3)
+
+    tillaten = read_image(img, cal, ReaderConfig(digit_count=3, upscale=1.0, decimals=2,
+                                                 require_all_digits=False))
+    nekad = read_image(img, cal, ReaderConfig(digit_count=3, upscale=1.0, decimals=2,
+                                              require_all_digits=True))
+
+    assert tillaten.confidence > 0.0
+    assert nekad.confidence == 0.0, "slackt siffra ska ge konfidens 0"
+
+
 def _reading(value: str, confidence: float) -> Reading:
     return Reading(value=value, confidence=confidence, digits=[], timestamp=0.0, boxes=[])
 

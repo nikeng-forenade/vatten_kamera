@@ -2,9 +2,10 @@
 
 Läser av pumpdisplayen i källaren efter kl. 02:00 och skickar värdet till Home Assistant.
 
-Displayen visar **liter kvar innan spolning**, men värdet syns bara i **10–12 sekunder**
-strax efter 02:00. Därför räcker det inte att ta en bild: programmet tänder lampan i tid,
-tar en bild i sekunden genom hela fönstret och låter en majoritetsröstning avgöra värdet.
+Displayen visar **liter kvar innan spolning** som ett tal med två decimaler, t.ex. `1.22`
+eller `0.50`. Värdet syns bara i **10–12 sekunder** strax efter 02:00. Därför räcker det
+inte att ta en bild: programmet tänder lampan i tid, tar en bild i sekunden genom hela
+fönstret och låter en majoritetsröstning avgöra värdet.
 
 ```mermaid
 flowchart LR
@@ -127,7 +128,12 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `CAMERA_IP`, `CAMERA_USER`, `CAMERA_PASSWORD` | – | Kameran. Använder Basic auth mot ISAPI |
 | `CAMERA_CHANNEL` | `101` | 101 = huvudström, 102 = subström |
 | `CALIBRATION_ROI` | – | Utsnittet där displayen sitter, `x1,y1,x2,y2` |
-| `DIGIT_COUNT` | `4` | Antal siffror på displayen |
+| `DIGIT_COUNT` | `4` | Antal siffror på displayen (punkten räknas inte) |
+| `DECIMALS` | `0` | Antal decimaler i värdet. Visas `1.22` är det 2 |
+| `REQUIRE_ALL_DIGITS` | `true` | Kräv att alla siffror lyser — en släckt siffra betyder felläsning |
+| `COLOR_CHANNEL` | `auto` | `b` för röd LED: siffrorna lyser men den röda glöden blir svart |
+| `THRESHOLD` | `0` | Fast tröskel 0–255. Hög tröskel håller spegelbilden i glaset borta |
+| `UNIT` | tom | Enhet vid sensorn i HA, t.ex. `m3` eller `l` |
 | `RUN_AT` | `02:00:00` | Klockslaget värdet visas |
 | `WINDOW_S` | `25` | Hur länge vi läser |
 | `INTERVAL_S` | `1.0` | Tid mellan bilderna |
@@ -147,7 +153,7 @@ Sensorerna skapas automatiskt via MQTT-discovery och dyker upp under enheten
 
 | Entitet | Betydelse |
 |---|---|
-| `sensor.vatten_kamera_liter_kvar` | Värdet. Attribut: `raw_text`, `confidence`, `röster`, `read_at`, `bild` |
+| `sensor.vatten_kamera_varde` | Värdet. Attribut: `raw_text`, `confidence`, `röster`, `read_at`, `bild` |
 | `binary_sensor.vatten_kamera_lasning_ok` | Om senaste läsningen lyckades |
 
 Testa utan att vänta till 02:00:
@@ -157,6 +163,10 @@ run.cmd main.py mqtt-test --value 1050
 ```
 
 ### Lampan
+
+Displayen är en **självlysande röd LED** och läses lika bra i mörker — lampan behövs
+alltså inte för att siffrorna ska synas. Den gör ändå nytta: mer ljus ger kortare
+slutartid och mindre brus i bilden, vilket ger säkrare tolkning.
 
 Lampan är inte installerad än. När den är på plats:
 

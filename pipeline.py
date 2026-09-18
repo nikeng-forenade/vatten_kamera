@@ -242,6 +242,7 @@ class NightlyRunner:
                 readings,
                 min_agreement=cfg.min_agreement,
                 min_confidence=cfg.min_confidence,
+                decimals=self.cfg.reader.decimals,
             )
 
             evidence = self._pick_evidence(saved, result.value)

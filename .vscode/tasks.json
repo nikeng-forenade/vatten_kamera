@@ -218,6 +218,22 @@
 			"args": [],
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Git: rätta meddelandet",
+			"type": "shell",
+			"command": "git -c user.name='nikeng-forenade' -c user.email='nikeng-forenade@users.noreply.github.com' commit --amend -m 'Dra at utsnittet automatiskt och lagg till ett diagnoskommando' -m 'calibrate drar sjalv at ROI:t runt sifferbandet och analyserar om, sa att man slipper passa in CALIBRATION_ROI for hand. Nytt kommando main.py diagnose som mater hur manga pixlar varje siffra far och sager till nar kameran star for langt bort (kravet ar minst 30 px per siffra). Tester: 15 passerar, 1 xfail.'; git push --force-with-lease; git log --oneline -3",
+			"args": [],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Git: commit 4",
+			"type": "shell",
+			"command": "git add -A; git -c user.name='nikeng-forenade' -c user.email='nikeng-forenade@users.noreply.github.com' commit -m 'Vardeformatet ar d.dd - tolka tva decimaler och krav alla siffror' -m 'Displayen visar 1.22 och 0.50, alltsa tre siffror med tva decimaler. Vardet tolkas nu med DECIMALS (122 blir 1.22) och publiceras som tal. Eftersom aven ledande nolla visas (0.50) maste alla tre siffrorna lysa - en slackt siffra ar alltid en fellasning och far nu konfidens 0 sa att den inte kan rostas fram. Enheten vid sensorn i HA satts med UNIT. Aven: dokumenterat att displayen ar sjalvlysande och inte behover lampan for att lasas. Tester: 18 passerar, 1 xfail.'; git push; git log --oneline -2",
+			"args": [],
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }

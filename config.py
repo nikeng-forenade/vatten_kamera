@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 ROOT = Path(__file__).resolve().parent
 CALIBRATION_FILE = ROOT / "calibration.json"
@@ -100,6 +100,8 @@ class MqttConfig:
     user: str = ""
     password: str = ""
     base_topic: str = "vatten_kamera"
+    # Enhet for sensorn i Home Assistant.
+    unit: str = "l"
     client_id: str = "vatten_kamera"
     discovery_prefix: str = "homeassistant"
     enabled: bool = False
@@ -144,6 +146,12 @@ class ReaderConfig:
     # Antal tecken i displayen (siffror + ev. separatorer).
     # 5 = t.ex. "1050" med en separat decimalpunkt, se calibration.json.
     digit_count: int = 4
+    # Antal decimaler i vardet. Displayen visar t.ex. 1.22 och 0.50, alltsa tre
+    # siffror dar de tva sista ar decimaler. 0 = vardet ar ett heltal.
+    decimals: int = 0
+    # Kraver att alla sifferpositioner lyser. Visar displayen alltid ledande
+    # nolla (som i 0.50) sa betyder en slackt siffra att tolkningen hamnat fel.
+    require_all_digits: bool = True
     # Vilken fargkanal som blir graaskala: "auto", "gray", "r", "g" eller "b".
     # En rod LED-display lyser starkast i rodkanalen, sa "auto" valjer den kanal
     # som har storst kontrast - det ger flera ganger battre skillnad an graaskala.
@@ -200,6 +208,7 @@ def load_config() -> Config:
         user=_get("MQTT_USER"),
         password=_get("MQTT_PASSWORD"),
         base_topic=_get("MQTT_BASE_TOPIC", "vatten_kamera"),
+        unit=_get("UNIT", "l"),
         client_id=_get("MQTT_CLIENT_ID", "vatten_kamera"),
         discovery_prefix=_get("MQTT_DISCOVERY_PREFIX", "homeassistant"),
         enabled=_get_bool("MQTT_ENABLED", bool(_get("MQTT_HOST"))),
@@ -222,6 +231,8 @@ def load_config() -> Config:
 
     reader = ReaderConfig(
         digit_count=_get_int("DIGIT_COUNT", 4),
+        decimals=_get_int("DECIMALS", 0),
+        require_all_digits=_get_bool("REQUIRE_ALL_DIGITS", True),
         channel=_get("COLOR_CHANNEL", "auto"),
         upscale=_get_float("UPSCALE", 5.0),
         normalize=_get_bool("NORMALIZE", True),
