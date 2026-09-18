@@ -1,0 +1,63 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Tester",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"-m",
+				"pytest",
+				"tests",
+				"-q",
+				"--no-header"
+			],
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Kalibrera",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"calibrate",
+				"--save"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Titta",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"peek",
+				"--scale",
+				"2"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Städa bort kalibrering",
+			"type": "shell",
+			"command": "Remove-Item",
+			"args": [
+				"-Force",
+				"F:\\vscode\\vatten_kamera\\calibration.json"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Git: init och add",
+			"type": "shell",
+			"command": "git init -b main; git add -A; git status --short",
+			"args": [],
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

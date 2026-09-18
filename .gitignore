@@ -1,0 +1,18 @@
+# Credentials & lokal konfiguration
+.env
+*.local.json
+
+# Fångade bilder / debug
+captures/
+debug_frames/
+*.jpg
+*.png
+!docs/**/*.png
+
+# Pythonskrräp
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
