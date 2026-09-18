@@ -303,6 +303,56 @@
 			"args": [],
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Sätt läs-läget",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"image",
+				"set",
+				"ircut=day",
+				"gain=20",
+				"shutter=1/100"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Exponering optimera",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"image",
+				"tune",
+				"--gains",
+				"2,5,10,20",
+				"--shutters",
+				"1/100,1/250,1/500"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Mät displayen",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\measure_display.py",
+				"captures\\runs\\20260918_153320\\grupp10_1bilder_1528.jpg"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Git: commit 6",
+			"type": "shell",
+			"command": "git add -A; git -c user.name='nikeng-forenade' -c user.email='nikeng-forenade@users.noreply.github.com' commit -m 'Hitta siffrorna som klumpar och mata displayen med siffror istallet for ogonmatt' -m 'Tva forbbattringar av kalibreringen: (1) siffrorna hittas nu som egna klumpar - segmenten inom en siffra smalter ihop medan avstandet mellan siffror ar storre, vilket klarar att de inte sitter pa jamna avstand. (2) Kalibreringen valjer den bild som visar flest siffror, i stallet for en tidsstack som blandar ihop displayens olika vyer. Nytt verktyg tools/measure_display.py som skriver ut kolumnprofilen som siffror - det visade att displayen har TRE siffror (x 1126-1203, 1234-1332, 1351-1448) och att utsnittet skar av en siffra. Kvarstar: avlasningen ar annu inte tillforlitlig, se README. Tester: 25 passerar, 1 xfail.'; git push",
+			"args": [],
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }

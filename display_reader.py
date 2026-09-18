@@ -469,6 +469,57 @@ def score_boxes(normalized: np.ndarray, binary: np.ndarray, band: Box, boxes: li
     return float(np.mean(scores)) - penalty
 
 
+def detect_cells_by_blobs(binary: np.ndarray, band: Box, digit_count: int) -> list[Box] | None:
+    """Hittar siffrorna som egna klumpar i bilden.
+
+    Segmenten inne i en siffra sitter tat ihop, medan avstandet mellan tva
+    siffror ar mycket storre. Fyller vi igen de sma glappen smalter varje siffra
+    ihop till en klump - och da far vi siffrornas exakta lagen utan att behova
+    anta att de sitter pa jamna avstand.
+
+    Det sistnamnda ar viktigt: displayen har ett kolon mellan tva av siffrorna,
+    sa avstanden ar inte jamna. Ett jamnt rutnat hamnar da fel.
+
+    Decimalpunkten och kolonprickarna ar sma och filtreras bort pa hojden.
+    """
+    x1, y1, x2, y2 = band
+    band_height = y2 - y1
+    if band_height < 8 or x2 <= x1:
+        return None
+
+    region = binary[y1:y2, x1:x2]
+    if region.size == 0:
+        return None
+
+    # Fyll igen glappen mellan segmenten i en siffra, men inte mellan siffror.
+    radius = max(1, int(0.08 * band_height)) | 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius, radius))
+    merged = cv2.morphologyEx(region, cv2.MORPH_CLOSE, kernel)
+
+    count, _, stats, _ = cv2.connectedComponentsWithStats(merged, connectivity=8)
+
+    blobs: list[tuple[int, int, int, int]] = []
+    for label in range(1, count):
+        bx, by, width, height, area = stats[label]
+        if area < 20:
+            continue
+        # Prickar (decimalpunkt, kolon) ar lave - siffror ar hoga.
+        if height < 0.45 * band_height:
+            continue
+        blobs.append((int(bx), int(by), int(width), int(height)))
+
+    if len(blobs) != digit_count:
+        return None
+
+    blobs.sort(key=lambda blob: blob[0])
+
+    cells: list[Box] = []
+    for bx, by, width, height in blobs:
+        cells.append((x1 + bx, y1 + by, x1 + bx + width, y1 + by + height))
+
+    return cells
+
+
 def detect_cells(normalized: np.ndarray, binary: np.ndarray, band: Box, digit_count: int) -> list[Box] | None:
     """Hittar siffercellerna genom att utga fran mellanrummen mellan siffrorna.
 
@@ -484,6 +535,13 @@ def detect_cells(normalized: np.ndarray, binary: np.ndarray, band: Box, digit_co
     x1, y1, x2, y2 = band
     if x2 - x1 < digit_count * 3 or y2 <= y1:
         return None
+
+    # Enklaste vagen forst: hitta varje siffra som en egen klump. Den metoden
+    # klarar att siffrorna inte sitter pa jamna avstand, vilket de inte gor nar
+    # displayen har ett kolon mellan tva av dem.
+    by_blobs = detect_cells_by_blobs(binary, band, digit_count)
+    if by_blobs is not None:
+        return by_blobs
 
     # Decimalpunkten ska inte vara med och bestamma delningen.
     digits_only = clean_binary(binary)

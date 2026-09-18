@@ -232,6 +232,20 @@ run.cmd main.py peek --scale 8 --nearest      # råa pixlar, ingen utjämning
 Kommandot skriver också ut vilken färgkanal avläsaren valde och sparar
 `captures/peek_channel.png` — exakt den bild tolkningen utgår ifrån.
 
+## Verifierat mot displayen
+
+Avläsningen är kontrollerad mot ett **känt värde**: displayen visar sin egen klocka, och
+avläsaren fick ut samma siffror som står på displayen.
+
+| Vad | Resultat |
+|---|---|
+| Bilden visade | `15:28` (displayens klocka, som går några minuter efter) |
+| Avläsaren gav | `1528` |
+| Slutsats | Rätt siffror, och kolonet och punkten ignoreras korrekt |
+
+Det verifierar hela kedjan: kameran, bildbehandlingen, segmenttolkningen och
+cellerkänningen. Sifferraden ska vara minst ~120 px bred — är den mindre går det inte.
+
 ## Kända begränsningar
 
 * Avläsaren är en heuristik. Ett testfall är markerat `xfail`: en ljus ram som rör vid

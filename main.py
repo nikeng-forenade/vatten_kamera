@@ -123,6 +123,44 @@ def _tighten_roi(
     )
 
 
+def _pick_calibration_frame(
+    frames: list[object],
+    roi: tuple[int, int, int, int],
+    cfg: Config,
+) -> object | None:
+    """Valjer den bild som visar flest siffror samtidigt.
+
+    Displayen vaxlar mellan olika vyer - klockan visar alla sifferpositioner,
+    medan ett vardepage visar farre. Kalibrerar vi mot en bild dar bara nagra
+    siffror lyser blir rutnatet for litet och hamnar fel sa fort displayen visar
+    nagot annat. Vi valjer darfor den bild som visar mest.
+    """
+    from display_reader import detect_cells_by_blobs
+
+    best_frame = None
+    best_score = -1.0
+
+    for frame in frames:
+        image = getattr(frame, "image", None)
+        if image is None:
+            continue
+        try:
+            _normalized, binary = preprocess(image, roi, cfg.reader)
+            band = find_band(binary)
+        except Exception:  # noqa: BLE001 - en trasig bild ska inte stoppa kalibreringen
+            continue
+
+        cells = detect_cells_by_blobs(binary, band, cfg.reader.digit_count)
+        lit = float(np.count_nonzero(binary))
+        # Fler siffror ar alltid battre; lika manga -> den bild med mest ljus.
+        score = (len(cells) * 1e9 + lit) if cells else lit
+        if score > best_score:
+            best_score = score
+            best_frame = frame
+
+    return best_frame or (frames[-1] if frames else None)
+
+
 def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
     """Hittar displayen i en bild och sparar ett kalibrerat rutnat.
 
@@ -149,9 +187,10 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
     print(f"bild: {width}x{height} px")
 
     if len(frames) > 1:
-        stacked = np.max(np.stack([f.image for f in frames]), axis=0)
-        print(f"lade ihop {len(frames)} bilder till en tidsstack")
-        analysis_image = stacked
+        chosen = _pick_calibration_frame(frames, cfg.calibration_roi or (0, 0, width, height), cfg)
+        image = getattr(chosen, "image", image)
+        print(f"valde den bild av {len(frames)} som visar flest siffror")
+        analysis_image = image
     else:
         analysis_image = image
 
