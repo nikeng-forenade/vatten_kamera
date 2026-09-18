@@ -675,6 +675,15 @@ def read_image(
     if getattr(cfg, "require_all_digits", True) and any(d.blank for d in digits):
         confidence = 0.0
 
+    # Tidsskarmarna (klockan 15:54 och spoltiden 02:00) anvander alla fyra
+    # positionerna, medan vardeskarmarna (vatten kvar 1.25 och flode nu 0.15)
+    # lamnar den FORSTA slackt: vardet star i position 2-4 med decimalpunkten
+    # efter position 2. Genom att krava en slackt forsta position kan en
+    # tidsskarm aldrig rostas fram som ett varde, annars skulle klockan 15:54
+    # publiceras som 5.54 och spoltiden 02:00 som 2.00.
+    if getattr(cfg, "require_blank_first", False) and digits and not digits[0].blank:
+        confidence = 0.0
+
     return Reading(
         value=value,
         confidence=confidence,
