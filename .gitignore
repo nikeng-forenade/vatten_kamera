@@ -2,6 +2,10 @@
 .env
 *.local.json
 
+# Kalibreringen ar specifik for kamerans exakta placering och gors pa plats
+# med "main.py calibrate --save". Den ska inte folja med till en annan maskin.
+calibration.json
+
 # Fångade bilder / debug
 captures/
 debug_frames/

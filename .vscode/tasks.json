@@ -191,6 +191,14 @@
 			"args": [],
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Git: ta bort kalibrering ur repot",
+			"type": "shell",
+			"command": "git rm --cached calibration.json; Remove-Item -Force calibration.json -ErrorAction SilentlyContinue; git add -A; git -c user.name='nikeng-forenade' -c user.email='nikeng-forenade@users.noreply.github.com' commit -m 'Kalibreringen ar platsspecifik och ska inte versionshanteras'; git push",
+			"args": [],
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }
