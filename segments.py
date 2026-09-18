@@ -51,15 +51,19 @@ DIGIT_MASKS: dict[str, int] = {
 
 # Segmentens utbredning som andel av siffercellens bredd/hojd.
 #
-# Den vertikala stapeln i en sjusegmentsiffra ligger i cellens yttre fjardedel.
-# Fons­tren nedan tacker darfor hela 0.00-0.26 respektive 0.74-1.00 i x-led: en
-# liten forskjutning av cellen (nagra procent) gor da ingen skillnad, medan det
-# inre, slackta omradet i en nolla (0.26-0.74) fortfarande lamnas i fred.
+# Den vertikala stapeln i en sjusegmentsiffra ligger i cellens yttre fjardedel,
+# sa fons­tren for f/b/e/c tacker hela 0.00-0.26 respektive 0.74-1.00 i x-led.
+#
+# Mittensegmentet (g) maste daremot vara smalt och ligga i mitten. Ett brett
+# fonster nar anda fram till siffrans bada sidostavar, och eftersom vardet tas
+# som 75:e percentilen racker det att andarna ar ljusa for att segmentet ska
+# anses lysa. Da lases hålet i en nolla som tillslaget och siffran blir en
+# atta - precis det som gjorde att displayen alltid lastes som "888".
 SEGMENT_BOXES: dict[str, tuple[float, float, float, float]] = {
     "a": (0.20, 0.04, 0.80, 0.17),
     "f": (0.02, 0.20, 0.26, 0.44),
     "b": (0.74, 0.20, 0.98, 0.44),
-    "g": (0.20, 0.44, 0.80, 0.57),
+    "g": (0.32, 0.44, 0.68, 0.57),
     "e": (0.02, 0.56, 0.26, 0.80),
     "c": (0.74, 0.56, 0.98, 0.80),
     "d": (0.20, 0.83, 0.80, 0.96),

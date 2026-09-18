@@ -241,12 +241,25 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
         print("utsnittet ar redan tight - behaller det")
 
     detected = detect_cells(normalized, binary, band, digits)
+    fitted, grid_score = fit_grid(normalized, binary, band, digits)
+
+    # Dalarna mellan siffrorna ar inte alltid tillforlitliga: halet inne i en
+    # nolla ar ocksa morkt, och da skar indelningen sonder siffran i smala
+    # remsor. Vi provar darfor bada vagarna och behaller den indelning som far
+    # hogst poang, i stallet for att lita pa dalarna blint.
+    from display_reader import score_boxes
+
     if detected is not None:
-        boxes = detected
-        grid_score = float("nan")
-        print("cellerna hittades via mellanrummen mellan siffrorna")
+        detected_score = score_boxes(normalized, binary, band, detected)
+        if detected_score >= grid_score:
+            boxes = detected
+            grid_score = detected_score
+            print("cellerna hittades via mellanrummen mellan siffrorna")
+        else:
+            boxes = fitted
+            print("mellanrummen gav en samre indelning - rutnatet passades in med sokning")
     else:
-        boxes, grid_score = fit_grid(normalized, binary, band, digits)
+        boxes = fitted
         print("mellanrummen gick inte att hitta - rutnatet passades in med sokning")
 
     scale = cfg.reader.upscale if cfg.reader.upscale else 1.0

@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 
 ROOT = Path(__file__).resolve().parent
 CALIBRATION_FILE = ROOT / "calibration.json"
