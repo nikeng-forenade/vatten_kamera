@@ -348,8 +348,13 @@ Home Assistant.
 **Tiden som gäller är pumpens egen klocka, inte datorns.** Spolningen startar när
 pumpens klocka slår det klockslag displayen visar (`02:00`), och pumpens klocka går
 efter — mätt 2026-09-20 visade den 15:15 klockan 15:20:25 och 18:32 klockan 18:37:53,
-alltså **~5 minuter efter**. Därför står `RUN_AT=02:05:30` i `.env`. Har du ställt
+alltså **~5 minuter efter**. Därför står `RUN_AT=02:05:00` i `.env`. Har du ställt
 pumpens klocka rätt sätter du tillbaka `RUN_AT` till `02:00:00`.
+
+Fönstret är två minuter långt, eftersom värdet man vill ha dyker upp **efter** att
+spolningen startar. Programmet röstar därför bara om de läsningar som kommer efter
+spoltidssidan (`02:00`) — annars kunde en annan värdesida, som displayen visar oftare
+under resten av dygnet, få flest röster.
 
 Kontrollera avvikelsen själv: kör `run.cmd main.py watch --minutes 3` och jämför
 klockslaget som visas med vad klockan är.

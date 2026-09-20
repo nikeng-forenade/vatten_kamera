@@ -288,8 +288,18 @@ class NightlyRunner:
 
             readings, saved = self._capture_and_read(duration_s=duration, frames_dir=run_dir)
 
+            # Vardet som ska ut visas strax efter att pumpen slog om till spolning
+            # (02:00). Resten av fonstret visar displayen sina andra sidor, och
+            # en av dem kan visa ett annat varde som ar latt att forvaxla. Da
+            # vore det fel att lata hela fonstret rostas ihop.
+            target = readings_after_recharge(readings)
+            if target:
+                log.info("rostar om %d lasningar efter spolttidssidan", len(target))
+            else:
+                target = readings
+
             result = consensus(
-                readings,
+                target,
                 min_agreement=cfg.min_agreement,
                 min_confidence=cfg.min_confidence,
                 decimals=self.cfg.reader.decimals,
@@ -364,6 +374,52 @@ class NightlyRunner:
             # Sov vidare till strax efter att korningen borde vara slut.
             next_target = self.next_run_time()
             self.wait_until(next_target - timedelta(seconds=self.cfg.run.pre_start_s))
+
+
+def page_kind(reading: Reading) -> str:
+    """Vad displayen visade i den har lasningen.
+
+    Displayen vaxlar mellan tidssidor (klockan och spolttiden, alla fyra
+    positioner tands) och vardesidor (vardet star i position 2-4, den forsta ar
+    slackt). Tidssidorna far konfidens 0 av `REQUIRE_BLANK_FIRST`, sa en lasning
+    med konfidens kvar ar en vardesida.
+    """
+    if not reading.digits:
+        return "okant"
+    if all(not digit.blank for digit in reading.digits):
+        return "tid"
+    if reading.ok and reading.confidence > 0.0:
+        return "varde"
+    return "okant"
+
+
+def readings_after_recharge(readings: list[Reading], *, span: int = 4) -> list[Reading]:
+    """Lasningarna som foljer pa spolttidssidan (displayens 02:00).
+
+    Vardet som ska ut visas strax efter att pumpen slar om till spolning. Resten
+    av dygnet vaxlar displayen mellan klockan, spolttiden och sina tva vardesidor,
+    och da kan ett annat varde visa sig oftare och fa flest roster. Har rostas
+    darfor bara det som kommer efter spolttidssidan.
+
+    Returnerar en tom lista om spolttidssidan inte syntes i korningen - da far
+    hela korningen ligga till grund for rostningen i stallet.
+    """
+    anchors = [index for index, reading in enumerate(readings) if (reading.value or "").strip() == "0200"]
+    if not anchors:
+        return []
+
+    # Flera spolttidssidor i rad pekar pa samma vardesida. Den ska bara rakna en
+    # gang, annars vager en enda grupp bilder tyngre an den ar vard.
+    chosen: list[Reading] = []
+    seen: set[int] = set()
+    for index in anchors:
+        for position, candidate in enumerate(readings[index + 1 : index + 1 + span], start=index + 1):
+            if page_kind(candidate) == "varde":
+                if position not in seen:
+                    seen.add(position)
+                    chosen.append(candidate)
+                break
+    return chosen
 
 
 def _safe_name(value: str | None) -> str:
