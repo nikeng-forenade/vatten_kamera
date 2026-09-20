@@ -64,12 +64,19 @@ DIGIT_MASKS: dict[str, int] = {
 # in over kanten och tander ett slakt segment.
 SEGMENT_BOXES: dict[str, tuple[float, float, float, float]] = {
     "a": (0.18, 0.04, 0.45, 0.17),
-    "f": (0.12, 0.24, 0.32, 0.38),
-    "b": (0.70, 0.24, 0.88, 0.38),
+    "f": (0.12, 0.22, 0.32, 0.34),
+    "b": (0.70, 0.22, 0.88, 0.34),
     "g": (0.46, 0.45, 0.58, 0.55),
     "e": (0.12, 0.62, 0.32, 0.76),
     "c": (0.70, 0.62, 0.88, 0.76),
-    "d": (0.18, 0.83, 0.45, 0.96),
+    # Bottenstrecket mats i cellens HOGRA halva. Displayens nia har ett kort
+    # bottenstreck som borjar forst vid x 0.47, sa i vanstra halvan ser nians
+    # bottenstreck slackt ut - nian fick da konfidens 0.07 och ett varde med en
+    # nia i sig kunde aldrig publiceras. Priset for att mata i hogra halvan ar
+    # att ettans stapel (x 0.55-1.0 med glod) tander fonstret, sa en etta far
+    # lagre konfidens (0.15-0.20). Ettan lases anda som en etta, eftersom a, f
+    # och g ar morka hos den. Darfor ar MIN_CONFIDENCE lagt satt i .env.
+    "d": (0.50, 0.83, 0.75, 0.96),
 }
 
 # Vilken percentil som anvands inom varje fonster.

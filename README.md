@@ -223,6 +223,7 @@ något ändras, så `image restore` kan alltid ta dig tillbaka.
 | **Läs blåkanalen, inte gråskala** | Rött ljus har inget blått. I blåkanalen lyser siffrorna medan den röda glöden runt dem blir svart — det ger en ren, skarp bild. Sätts med `COLOR_CHANNEL=b`. |
 | **Hög tröskel (`THRESHOLD=250`)** | Siffrorna är mättade medan spegelbilden i displayglaset är svag. Tröskeln håller spegelbilden borta så att sifferbandet inte blir för högt. |
 | **Mättad exponering, inte "lagom"** | Displayen lyser själv, men i blåkanalen är en röd LED svag — blir siffrorna inte mättade smiter de igenom tröskeln. `main.py image tune` mäter hur långt varje segments ljusnivå ligger från mitten (där tolken inte kan skilja tänt från släckt). Mätt 2026-09-20: **gain 40 + 1/50** gav celler på 95×103 px och värdet `116` med konfidens 0.57–0.62, medan **gain 20 + 1/250** gav en fem gånger mörkare bild där cellerna krympte till 60×88 px och läsningen gav skräp (`1`, `3`, `?4`, `31`). |
+| Displayens **nia har ett kort bottenstreck** (börjar först vid mitten) | Bottenstreckets fönster mäts därför i cellens högra halva — i vänstra halvan ser nians bottenstreck släckt ut (konfidens 0.07). Priset är att ettans stapel tänder samma fönster, så en etta får konfidens 0.15–0.20. Båda siffrorna läses ändå rätt (ettan känns igen på att a, f och g är släckta), men marginalen är mindre — därför är `MIN_CONFIDENCE` lågt satt. |
 
 ### Läsprofilen — kameran lånas bara under läsningen
 
