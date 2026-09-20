@@ -264,3 +264,30 @@ def test_majoritetsrostning_ratar_bort_lag_konfidens() -> None:
     ]
     result = consensus(readings, min_agreement=3, min_confidence=0.75)
     assert not result.ok, "lasningar med lag konfidens ska inte kunna rostas fram"
+
+
+def test_en_grupp_av_lika_bilder_ger_lika_manga_roster() -> None:
+    # Bilderna vags samman i grupper innan de tolkas. En grupp pa tio bilder ar
+    # alltsa tio roster - annars skulle tio bilder av samma varde bara bli en
+    # enda rost och lasningen aldrig na over kravet pa tre eniga.
+    reading = _reading("122", 0.90)
+    reading.weight = 10
+    result = consensus([reading], min_agreement=3, min_confidence=0.75)
+
+    assert result.ok, "en grupp pa tio bilder ska racka som tio roster"
+    assert result.votes == 10
+    assert result.total == 10
+
+
+def test_ostridiga_bilder_vager_lattare_an_en_hel_grupp() -> None:
+    # Tva enstaka bilder far inte sla en grupp pa fem bilder, aven om de visas
+    # i var sin grupp.
+    single_a = _reading("1050", 0.95)
+    single_b = _reading("1050", 0.95)
+    group = _reading("1058", 0.95)
+    group.weight = 5
+
+    result = consensus([single_a, single_b, group], min_agreement=3, min_confidence=0.75)
+    assert result.ok
+    assert result.value == "1058", "gruppen ska vaga tyngre an tva enstaka bilder"
+    assert result.votes == 5

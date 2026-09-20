@@ -205,6 +205,9 @@ class NightlyRunner:
                 reader_cfg,
                 timestamp=float(len(indices)),
             )
+            # Rosten vager lika tungt som antalet bilder i gruppen. Annars kan
+            # tio bilder av samma varde bara bli en enda rost i rostningen.
+            reading.weight = len(indices)
             readings.append(reading)
 
             if reading.ok:
@@ -323,8 +326,8 @@ class NightlyRunner:
                 version=VERSION,
                 started=started.isoformat(timespec="seconds"),
                 finished=datetime.now().isoformat(timespec="seconds"),
-                frames_taken=len(readings),
-                frames_readable=sum(1 for r in readings if r.ok),
+                frames_taken=sum(max(1, r.weight) for r in readings),
+                frames_readable=sum(max(1, r.weight) for r in readings if r.ok),
                 value=result.value,
                 numeric=result.numeric,
                 votes=result.votes,
@@ -376,9 +379,10 @@ def _safe_name(value: str | None) -> str:
 def _failure_reason(readings: list[Reading], min_confidence: float) -> str:
     if not readings:
         return "inga bilder kunde tas"
+    total = sum(max(1, r.weight) for r in readings)
     usable = [r for r in readings if r.ok]
     if not usable:
-        return f"inget varde kunde lasas i {len(readings)} bilder"
+        return f"inget varde kunde lasas i {total} bilder"
     return (
         f"for fa eniga lasningar (basta varde {max(r.confidence for r in usable):.2f} "
         f"mot kravet {min_confidence:.2f})"

@@ -3,8 +3,9 @@
 Exempel:
     python main.py version
     python main.py probe                     # testa kameran
-    python main.py calibrate --suggest       # hitta displayen och kalibrera
-    python main.py calibrate --roi 430,1185,590,1240 --digits 4
+    python main.py calibrate --frames 16     # mater sifferpositionerna
+    python main.py calibrate --frames 16 --save
+    python main.py calibrate --roi 985,0,1620,200 --digits 4
     python main.py read --seconds 15         # las nu och visa resultatet
     python main.py lamp on                   # testa lampan
     python main.py mqtt-test                 # publicera ett provvarde
@@ -28,10 +29,10 @@ from camera import CameraError, HikvisionCamera
 from config import ROOT, VERSION, Config, load_config
 from display_reader import (
     Calibration,
-    decode_cell,
-    detect_cells,
-    find_band,
-    fit_grid,
+    ReaderError,
+    draw_cells_overlay,
+    load_cell_boxes,
+    measure_cells,
     preprocess,
     read_image,
 )
@@ -92,88 +93,19 @@ def _xml_value(xml: str, tag: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _tighten_roi(
-    roi: tuple[int, int, int, int],
-    band: tuple[int, int, int, int],
-    cfg: Config,
-    shape: tuple[int, int],
-) -> tuple[int, int, int, int]:
-    """Drar at ROI:t sa att det precis omsluter sifferbandet.
-
-    Blir ROI:t for stort hamnar tomt morker och pumphus med i bade troskling och
-    normalisering, och da blir siffrorna samre atergivna. Vi drar darfor at
-    utsnittet runt det band vi hittade och analyserar om.
-    """
-    scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
-    height, width = shape
-
-    x1 = int(round(roi[0] + band[0] / scale))
-    y1 = int(round(roi[1] + band[1] / scale))
-    x2 = int(round(roi[0] + band[2] / scale))
-    y2 = int(round(roi[1] + band[3] / scale))
-
-    pad_x = max(3, int(0.12 * (x2 - x1)))
-    pad_y = max(2, int(0.25 * (y2 - y1)))
-
-    return (
-        max(0, x1 - pad_x),
-        max(0, y1 - pad_y),
-        min(width, x2 + pad_x),
-        min(height, y2 + pad_y),
-    )
-
-
-def _pick_calibration_frame(
-    frames: list[object],
-    roi: tuple[int, int, int, int],
-    cfg: Config,
-) -> object | None:
-    """Valjer den bild som visar flest siffror samtidigt.
-
-    Displayen vaxlar mellan olika vyer - klockan visar alla sifferpositioner,
-    medan ett vardepage visar farre. Kalibrerar vi mot en bild dar bara nagra
-    siffror lyser blir rutnatet for litet och hamnar fel sa fort displayen visar
-    nagot annat. Vi valjer darfor den bild som visar mest.
-    """
-    from display_reader import detect_cells_by_blobs
-
-    best_frame = None
-    best_score = -1.0
-
-    for frame in frames:
-        image = getattr(frame, "image", None)
-        if image is None:
-            continue
-        try:
-            _normalized, binary = preprocess(image, roi, cfg.reader)
-            band = find_band(binary)
-        except Exception:  # noqa: BLE001 - en trasig bild ska inte stoppa kalibreringen
-            continue
-
-        cells = detect_cells_by_blobs(binary, band, cfg.reader.digit_count)
-        lit = float(np.count_nonzero(binary))
-        # Fler siffror ar alltid battre; lika manga -> den bild med mest ljus.
-        score = (len(cells) * 1e9 + lit) if cells else lit
-        if score > best_score:
-            best_score = score
-            best_frame = frame
-
-    return best_frame or (frames[-1] if frames else None)
-
-
 def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
-    """Hittar displayen i en bild och sparar ett kalibrerat rutnat.
+    """Mater siffercellerna och sparar kalibreringen.
 
-    Displayen vaxlar varde hela tiden, och en siffra som rakar vara slackt just
-    nu syns inte alls. Vi tar darfor ett antal bilder och behaller det ljusaste
-    vardet per pixel. Da framtrader alla sifferpositioner samtidigt, oavsett
-    vilket varde som rakade visas.
+    Displayen vaxlar mellan olika vyer, sa en enskild bild visar bara nagra av
+    sifferpositionerna. Vi tar darfor en serie bilder och mater varje position
+    for sig: kameran ser panelen snett, sa sifferraden lutar och den sista
+    siffran sitter nagra tiotal pixlar lagre i bilden an den forsta.
     """
     camera = HikvisionCamera(cfg.camera)
-    frames = []
+    frames: list[np.ndarray] = []
     try:
         for index in range(max(1, args.frames)):
-            frames.append(camera.snapshot())
+            frames.append(camera.snapshot().image)
             if index < args.frames - 1:
                 time.sleep(args.interval)
     except CameraError as exc:
@@ -182,17 +114,9 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
     finally:
         camera.close()
 
-    image = frames[-1].image
+    image = frames[-1]
     height, width = image.shape[:2]
-    print(f"bild: {width}x{height} px")
-
-    if len(frames) > 1:
-        chosen = _pick_calibration_frame(frames, cfg.calibration_roi or (0, 0, width, height), cfg)
-        image = getattr(chosen, "image", image)
-        print(f"valde den bild av {len(frames)} som visar flest siffror")
-        analysis_image = image
-    else:
-        analysis_image = image
+    print(f"bild: {width}x{height} px, {len(frames)} bilder i serien")
 
     if args.roi:
         roi = tuple(int(v) for v in args.roi.split(","))
@@ -203,152 +127,65 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
         roi = cfg.calibration_roi
         print(f"ROI fran .env: {roi[0]},{roi[1]},{roi[2]},{roi[3]}")
     else:
-        # Foresla ett ROI utifran var siffrorna sitter i hela bilden.
-        roi = _suggest_roi(analysis_image, cfg)
-        print(f"foreslaget ROI: {roi[0]},{roi[1]},{roi[2]},{roi[3]}")
+        roi = _suggest_roi(image, cfg)
+        print(f"foreslaget ROI (saltt i .env): {roi[0]},{roi[1]},{roi[2]},{roi[3]}")
 
     digits = args.digits or cfg.reader.digit_count
 
-    # Rita en hjalpbild sa man ser att ROI:t sitter ratt.
+    try:
+        absolute, report = measure_cells(
+            frames, roi, cfg.reader, digits, prior=load_cell_boxes(cfg.calibration_file)
+        )
+    except ReaderError as exc:
+        print(f"FEL: {exc}")
+        return 1
+
+    print()
+    for line in report:
+        print(f"  {line}")
+
+    print("\ncellrutor i helbildens koordinater:")
+    for index, box in enumerate(absolute, start=1):
+        print(f"  position {index}: x {box[0]:4d}..{box[2]:4d} ({box[2] - box[0]:3d} px)"
+              f"   y {box[1]:4d}..{box[3]:4d} ({box[3] - box[1]:3d} px)")
+
+    # Kontrollbilder: hela bilden med cellrutorna, och tidsstacken (dar alla
+    # positioner lyser samtidigt) med cellrutor och matfonster. Sitter de grona
+    # rutorna pa segmenten ar geometrin ratt.
     DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     marked = image.copy()
     cv2.rectangle(marked, (roi[0], roi[1]), (roi[2], roi[3]), (0, 0, 255), 4)
+    for box in absolute:
+        cv2.rectangle(marked, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 2)
     marked_path = DEBUG_DIR / f"calibrate_{stamp}_roi.png"
     cv2.imwrite(str(marked_path), marked)
 
-    if len(frames) > 1:
-        cv2.imwrite(str(DEBUG_DIR / f"calibrate_{stamp}_stack.png"), analysis_image[roi[1] : roi[3], roi[0] : roi[2]])
-
-    normalized, binary = preprocess(analysis_image, roi, cfg.reader)
-    band = find_band(binary)
-
-    # Dra at utsnittet runt det band vi hittade och analysera om. Da slipper man
-    # sitta och passa in ROI:t for hand, och tolkningen blir sakrare nar varken
-    # tomt morker eller pumphus kommer med.
-    tightened = _tighten_roi(roi, band, cfg, (height, width))
-    # Bara om utsnittet ar mycket storre an sjalva siffrorna. Ar det redan natt
-    # och tight ar en atstramning bara riskabel - den kan skara bort siffror.
-    band_scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
-    band_area = max(1.0, float((band[2] - band[0]) * (band[3] - band[1])))
-    roi_area = max(1.0, float((roi[2] - roi[0]) * (roi[3] - roi[1]))) * band_scale * band_scale
-    if tightened != roi and band_area < 0.45 * roi_area:
-        print(f"drar at utsnittet: {roi} -> {tightened}")
-        roi = tightened
-        normalized, binary = preprocess(analysis_image, roi, cfg.reader)
-        band = find_band(binary)
-    else:
-        print("utsnittet ar redan tight - behaller det")
-
-    detected = detect_cells(normalized, binary, band, digits)
-    fitted, fitted_score = fit_grid(normalized, binary, band, digits)
-
-    from display_reader import score_boxes
-
-    # Ett fast sjusegmentsblock har jamnt fordelade sifferfonster, och dar ar en
-    # jamn delning av bandet det mest tillforlitliga: dalarna mellan siffrorna
-    # ar smala och latta att hamna fel pa (halet inne i en nolla ar ocksa
-    # morkt), och rutnatssokningen belonar dessutom breda celler eftersom de
-    # ger en sjalvsaker men felaktig "atta". Den jamna delningen traffar ratt sa
-    # lange alla positioner lyser, sa den provas forst. Dalarna och sokningen
-    # anvands bara om den skulle fa en riktigt dalig poang.
-    band_x1, band_y1, band_x2, band_y2 = band
-    span = band_x2 - band_x1
-    even = [
-        (
-            band_x1 + int(round(index * span / digits)),
-            band_y1,
-            band_x1 + int(round((index + 1) * span / digits)),
-            band_y2,
-        )
-        for index in range(digits)
-    ]
-    even_score = score_boxes(normalized, binary, band, even)
-
-    if even_score >= 0.0:
-        boxes = even
-        grid_score = even_score
-        print("jamn delning av bandet (fast sjusegmentsblock)")
-    elif detected is not None:
-        boxes = detected
-        grid_score = score_boxes(normalized, binary, band, detected)
-        print("cellerna hittades via mellanrummen mellan siffrorna")
-    else:
-        boxes = fitted
-        grid_score = fitted_score
-        print("mellanrummen gick inte att hitta - rutnatet passades in med sokning")
-
-    scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
-    absolute = [
-        (
-            int(round(roi[0] + bx1 / scale)),
-            int(round(roi[1] + by1 / scale)),
-            int(round(roi[0] + bx2 / scale)),
-            int(round(roi[1] + by2 / scale)),
-        )
-        for bx1, by1, bx2, by2 in boxes
-    ]
-
-    calibration = Calibration(roi=roi, digit_count=digits, cell_boxes=absolute)
-
-    # Läs den senaste bilden med rutnatet - tidsstacken visar flera varden och
-    # gar inte att tolka som ett tal.
-    reading = read_image(image, calibration, cfg.reader, timestamp=frames[-1].timestamp)
-
-    print(f"\nsifferband : {band}")
-    if grid_score == grid_score:  # inte NaN
-        print(f"rutnatspoang: {grid_score:.3f}")
-    print(f"last varde : {reading.value!r}   konfidens {reading.confidence:.3f}\n")
-
-    for index, (box, digit) in enumerate(zip(absolute, reading.digits), start=1):
-        values = " ".join(f"{k}={v:.2f}" for k, v in sorted(digit.segment_values.items()))
-        print(f"  siffra {index}: {box} -> {digit.char!r} konfidens {digit.confidence:.2f}")
-        print(f"              {values}")
-
-    # Rita ut det valda rutnatet.
-    for box in absolute:
-        cv2.rectangle(marked, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 2)
-    cv2.imwrite(str(marked_path), marked)
-
-    # Rita ut de sju samplingsrutorna per siffra ovanpa den bild avlasaren ser.
-    # Gron ruta = avlasaren tycker att segmentet lyser. Da syns det direkt om
-    # rutorna sitter pa segmenten eller bredvid.
-    from segments import SEGMENT_BOXES
-
-    canvas = cv2.cvtColor((normalized * 255).astype("uint8"), cv2.COLOR_GRAY2BGR)
-    for cell, digit in zip(boxes, reading.digits):
-        cx1, cy1, cx2, cy2 = cell
-        cell_w = cx2 - cx1
-        cell_h = cy2 - cy1
-        for name, (fx1, fy1, fx2, fy2) in SEGMENT_BOXES.items():
-            sx1 = cx1 + int(round(fx1 * cell_w))
-            sx2 = cx1 + int(round(fx2 * cell_w))
-            sy1 = cy1 + int(round(fy1 * cell_h))
-            sy2 = cy1 + int(round(fy2 * cell_h))
-            lit = digit.segment_values.get(name, 0.0) > 0.5
-            colour = (0, 255, 0) if lit else (0, 0, 255)
-            cv2.rectangle(canvas, (sx1, sy1), (sx2, sy2), colour, 1)
+    stacked = np.max(np.stack(frames), axis=0)
+    cv2.imwrite(
+        str(DEBUG_DIR / f"calibrate_{stamp}_stack.png"),
+        stacked[roi[1] : roi[3], roi[0] : roi[2]],
+    )
     segments_path = DEBUG_DIR / f"calibrate_{stamp}_segments.png"
-    cv2.imwrite(str(segments_path), canvas)
-    print(f"segmentrutor -> {segments_path}  (gron = lyser, rod = slackt)")
+    cv2.imwrite(str(segments_path), draw_cells_overlay(stacked, roi, absolute, cfg.reader))
+    print(f"\nkontrollbilder -> {DEBUG_DIR}\\calibrate_{stamp}_roi.png och _segments.png")
+
+    calibration = Calibration(roi=tuple(roi), digit_count=digits, cell_boxes=absolute)
+    reading = read_image(image, calibration, cfg.reader)
+    print(f"laser just nu : {reading.value!r}   konfidens {reading.confidence:.2f}")
+    for index, digit in enumerate(reading.digits, start=1):
+        values = " ".join(f"{key}={value:.2f}" for key, value in sorted(digit.segment_values.items()))
+        print(f"  position {index}: {digit.char!r} konfidens {digit.confidence:.2f}   {values}")
 
     if args.save:
-        # Spara samma normaliserade ROI-bild som avlasaren ser, sa att varje
-        # senare bildruta kan riktas in mot den innan cellerna anvands. Det gor
-        # lasningen okanslig for att kameran rubbas nagra pixel.
-        from display_reader import REFERENCE_FILE, save_reference
-
-        reference_path = cfg.calibration_file.with_name(REFERENCE_FILE)
-        save_reference(normalized, str(reference_path))
-        print(f"referensbild    -> {reference_path}")
-
         cfg.calibration_file.write_text(
             json.dumps(
                 {
                     "roi": list(roi),
                     "digit_count": digits,
-                    "cell_boxes": [list(b) for b in absolute],
-                    "notes": f"kalibrerad {datetime.now():%Y-%m-%d %H:%M}",
+                    "cell_boxes": [list(box) for box in absolute],
+                    "notes": f"kalibrerad {datetime.now():%Y-%m-%d %H:%M} - egen hojd per position",
                 },
                 indent=2,
                 ensure_ascii=False,
@@ -357,10 +194,20 @@ def cmd_calibrate(cfg: Config, args: argparse.Namespace) -> int:
             encoding="utf-8",
         )
         print(f"\nkalibrering sparad -> {cfg.calibration_file}")
+
+        if cfg.reader.reference_file:
+            # Referensbilden anvands for att rikta in senare bildrutor. Den tas
+            # fran tidsstacken, sa att den visar alla positioner samtidigt.
+            from display_reader import save_reference
+
+            normalized, _binary = preprocess(stacked, roi, cfg.reader)
+            reference_path = cfg.calibration_file.with_name(cfg.reader.reference_file)
+            save_reference(normalized, str(reference_path))
+            print(f"referensbild       -> {reference_path}")
     else:
         print("\n(torrkorning - inget sparat. Kor med --save for att spara)")
 
-    print(f"kontrollbild -> {marked_path}")
+    print(f"kontrollbild       -> {marked_path}")
     return 0
 
 
@@ -436,7 +283,7 @@ def cmd_read(cfg: Config, args: argparse.Namespace) -> int:
     try:
         summary = runner.run_once(duration_s=args.seconds, save=args.spara)
     except FileNotFoundError:
-        print("FEL: ingen kalibrering finns. Kor 'python main.py calibrate --save' forst.")
+        print("FEL: ingen kalibrering finns. Kor 'main.py calibrate --frames 16 --save' forst.")
         return 1
 
     print()
@@ -531,16 +378,18 @@ def cmd_diagnose(cfg: Config, args: argparse.Namespace) -> int:
     """Sager till om kameran star tillrackligt nara for att kunna lasa displayen.
 
     Kor den har forst nar nagot inte fungerar: den svarar pa om problemet sitter
-    i kameran, i ljuset eller i sjalva tolkningen.
+    i kameran, i ljuset eller i sjalva tolkningen. Den laser de sparade
+    cellrutorna och nagra enskilda bilder, sa att svaret sager nagot om hur
+    lasningen faktiskt ser ut - inte bara hur en tidsstack ser ut.
     """
     from camera_settings import CameraSettings, CameraSettingsError
-    from display_reader import detect_cells as detect, score_boxes
+    from segments import segment_values
 
     camera = HikvisionCamera(cfg.camera)
-    frames = []
+    frames: list[np.ndarray] = []
     try:
         for index in range(max(1, args.frames)):
-            frames.append(camera.snapshot())
+            frames.append(camera.snapshot().image)
             if index < args.frames - 1:
                 time.sleep(1.0)
     except CameraError as exc:
@@ -549,74 +398,96 @@ def cmd_diagnose(cfg: Config, args: argparse.Namespace) -> int:
     finally:
         camera.close()
 
-    image = np.max(np.stack([f.image for f in frames]), axis=0) if len(frames) > 1 else frames[-1].image
-    if not cfg.calibration_roi:
-        print("FEL: CALIBRATION_ROI maste vara satt i .env")
-        return 2
-    roi = cfg.calibration_roi
-
-    normalized, binary = preprocess(image, roi, cfg.reader)
-    band = find_band(binary)
-
-    scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
-    row_width = (band[2] - band[0]) / scale
-    row_height = (band[3] - band[1]) / scale
-    per_digit = row_width / cfg.reader.digit_count
-
-    boxes = detect(normalized, binary, band, cfg.reader.digit_count)
-    method = "mellanrummen mellan siffrorna"
-    if boxes is None:
-        boxes, _ = fit_grid(normalized, binary, band, cfg.reader.digit_count)
-        method = "inpassning med sokning"
-    score = score_boxes(normalized, binary, band, boxes)
-
     print(f"version        : {VERSION}")
-    print(f"bild           : {image.shape[1]}x{image.shape[0]} px, {len(frames)} bilder i stacken")
-    print(f"utsnitt (ROI)  : {roi[0]},{roi[1]},{roi[2]},{roi[3]}")
-    print(f"sifferband     : {row_width:.0f}x{row_height:.0f} px   ({per_digit:.1f} px per siffra)")
-    print(f"cellindelning  : {method}")
-    print(f"lasbarhetspoang: {score:+.3f}")
+    print(f"bild           : {frames[-1].shape[1]}x{frames[-1].shape[0]} px, {len(frames)} bilder")
 
-    print("\nsiffrorna just nu (ur tidsstacken - alla positioner samtidigt):")
-    print("(en tidsstack visar allt som lyst under körningen, sa en siffra kan se")
-    print(" ut som en atta trots att den aldrig visat en atta - det ar vantan)")
-    for index, box in enumerate(boxes, start=1):
-        cell = normalized[box[1] : box[3], box[0] : box[2]]
-        result = decode_cell(cell) if cell.size else None
-        if result is None:
+    if not cfg.calibration_file.exists():
+        print("FEL: ingen kalibrering. Kor 'main.py calibrate --frames 16 --save' forst.")
+        return 2
+
+    try:
+        calibration = Calibration.load(cfg.calibration_file)
+    except ReaderError as exc:
+        print(f"FEL: {exc}")
+        return 2
+
+    roi = calibration.roi
+    print(f"utsnitt (ROI)  : {roi[0]},{roi[1]},{roi[2]},{roi[3]}")
+
+    if not calibration.cell_boxes:
+        print("FEL: kalibreringen saknar cellrutor. Kor 'main.py calibrate --frames 16 --save'.")
+        return 2
+
+    widths = [box[2] - box[0] for box in calibration.cell_boxes]
+    heights = [box[3] - box[1] for box in calibration.cell_boxes]
+    print(f"celler         : {min(widths)}-{max(widths)} px breda, {min(heights)}-{max(heights)} px hoga")
+    for index, box in enumerate(calibration.cell_boxes, start=1):
+        print(f"  position {index}   : x {box[0]}..{box[2]}   y {box[1]}..{box[3]}")
+
+    # Las de sista bilderna var for sig. En tidsstack visar allt som lyst under
+    # korningen, sa en siffra kan se ut som en atta dar fast den aldrig visat en
+    # atta - bara riktiga bilder sager nagot om lasningen.
+    print("\nlasning av de sista bilderna:")
+    tail = frames[-min(4, len(frames)) :]
+    values: list[str] = []
+    for index, image in enumerate(tail, start=1):
+        reading = read_image(image, calibration, cfg.reader)
+        digits = " ".join(f"{digit.char!r}:{digit.confidence:.2f}" for digit in reading.digits)
+        print(f"  bild {index}: varde {reading.value!r:<8} konfidens {reading.confidence:.2f}   {digits}")
+        if reading.ok:
+            values.append(reading.value)
+
+    stacked = np.max(np.stack(frames), axis=0) if len(frames) > 1 else frames[-1]
+    normalized, _binary = preprocess(stacked, roi, cfg.reader)
+    scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
+    print("\nsegment ur tidsstacken (alla positioner samtidigt):")
+    for index, (ax1, ay1, ax2, ay2) in enumerate(calibration.cell_boxes, start=1):
+        cx1 = int(round((ax1 - roi[0]) * scale))
+        cy1 = int(round((ay1 - roi[1]) * scale))
+        cx2 = int(round((ax2 - roi[0]) * scale))
+        cy2 = int(round((ay2 - roi[1]) * scale))
+        cell = normalized[cy1:cy2, cx1:cx2]
+        if cell.size == 0:
+            print(f"  position {index}: cellen ligger utanfor bilden")
             continue
-        print(f"  siffra {index}: {result.char!r} konfidens {result.confidence:.2f}")
+        values_by_segment = segment_values(cell)
+        lit = "".join(name for name, value in sorted(values_by_segment.items()) if value > 0.5) or "-"
+        print(f"  position {index}: lyser {lit:<8}"
+              + "  " + " ".join(f"{key}={values_by_segment[key]:.2f}" for key in sorted(values_by_segment)))
 
     try:
         settings = CameraSettings(cfg.camera)
-        values = settings.read()
+        camera_values = settings.read()
         print("\nkameran:")
         for key in ("ircut", "exposure_type", "gain", "shutter", "sharpness", "wdr_mode"):
-            if key in values:
-                print(f"  {key:<14} {values[key]}")
-        if values.get("ircut") == "night":
+            if key in camera_values:
+                print(f"  {key:<14} {camera_values[key]}")
+        if camera_values.get("ircut") == "night":
             print("  -> NATTLAGE: displayen branner ut. Kor: main.py image set ircut=day")
     except CameraSettingsError as exc:
         print(f"kameran: kunde inte lasas ({exc})")
 
     print("\nbedomning:")
     ok = True
-    if per_digit < 25:
-        print(f"  FOR LITEN: bara {per_digit:.0f} px per siffra. Segmenten gar inte att skilja.")
-        print("             Flytta kameran namare - sikta pa minst 30 px per siffra")
-        print(f"             (alltsa {30 * cfg.reader.digit_count:.0f} px for hela raden).")
+    smallest = min(widths)
+    if smallest < 60:
+        print(f"  FOR LITEN: den smalaste cellen ar bara {smallest} px. Flytta kameran namare.")
         ok = False
-    elif per_digit < 30:
-        print(f"  PA GRANSEN: {per_digit:.0f} px per siffra. Kan ga, men osakert.")
     else:
-        print(f"  BRA: {per_digit:.0f} px per siffra.")
+        print(f"  cellstorleken ar bra ({smallest} px for den smalaste siffran).")
 
-    if score < 0.30:
-        print(f"  LASBARHETEN AR LAG ({score:+.3f}). Kontrollera exponering och troskel.")
+    if len(values) != len(tail):
+        print(f"  bara {len(values)} av de {len(tail)} sista bilderna gav ett varde.")
         ok = False
+    elif len(set(values)) == 1:
+        print(f"  de sista bilderna visar samma varde ({values[0]!r}) - lasningen ar stabil.")
+    else:
+        print(f"  bilderna visar olika varden ({', '.join(repr(v) for v in values)}) -")
+        print("  det ar normalt: displayen vaxlar mellan klockan, spoltiden och vardena.")
 
-    if ok:
-        print("  Allt ser bra ut. Kor 'main.py calibrate --save' och sedan 'main.py read'.")
+    if not ok:
+        print("  Kor 'tools/fit_cells.py captures/<serie> --read' for att se fler bilder,")
+        print("  eller 'main.py calibrate --frames 16 --save' om kameran flyttats.")
 
     return 0 if ok else 1
 
@@ -795,7 +666,7 @@ def _tune_exposure(cfg: Config, settings: object, args: argparse.Namespace) -> i
     import time
 
     from camera_settings import CameraSettingsError
-    from display_reader import find_band, fit_grid, preprocess
+    from display_reader import find_band, fit_grid, score_boxes, to_internal
 
     if not cfg.calibration_roi:
         print("FEL: CALIBRATION_ROI maste vara satt i .env for att kunna optimera")
@@ -803,6 +674,12 @@ def _tune_exposure(cfg: Config, settings: object, args: argparse.Namespace) -> i
 
     roi = cfg.calibration_roi
     digits = cfg.reader.digit_count
+    scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
+    calibration_cells = load_cell_boxes(cfg.calibration_file)
+    if not calibration_cells or len(calibration_cells) != digits:
+        calibration_cells = None
+        print("tips: kor 'main.py calibrate --frames 16 --save' forst - da mats")
+        print("      exponeringen mot de riktiga sifferrutorna i stallet for en gissning.\n")
     settings.backup()  # type: ignore[attr-defined]
     print(f"utgar fran ROI {roi[0]},{roi[1]},{roi[2]},{roi[3]}, {digits} siffror\n")
 
@@ -831,7 +708,16 @@ def _tune_exposure(cfg: Config, settings: object, args: argparse.Namespace) -> i
                 try:
                     normalized, binary = preprocess(frame.image, roi, cfg.reader)
                     band = find_band(binary)
-                    _boxes, score = fit_grid(normalized, binary, band, digits)
+                    if calibration_cells:
+                        # Rutnatet ar redan kant - poanga hur bra det forklarar
+                        # bilden. Att leta efter ett nytt rutnat har skulle
+                        # belona breda celler, alltsa en sjalvsaker men felaktig
+                        # "atta", och da vinner den mest utbranda exponeringen.
+                        score = score_boxes(
+                            normalized, binary, band, to_internal(calibration_cells, roi, scale)
+                        )
+                    else:
+                        _boxes, score = fit_grid(normalized, binary, band, digits)
                 except ReaderError as exc:
                     print(f"  gain={gain:<4} slutare={shutter:<6} kunde inte tolka: {exc}")
                     continue
@@ -854,7 +740,7 @@ def _tune_exposure(cfg: Config, settings: object, args: argparse.Namespace) -> i
     print(f"\nbasta: gain={best_gain} slutare={best_shutter} (lasbarhet {best_score:+.3f}, band {band_size} px)")
 
     settings.apply({"gain": best_gain, "shutter": best_shutter})  # type: ignore[attr-defined]
-    print("installt. Kor 'main.py calibrate --save' for att passa in rutnatet.")
+    print("installt. Kontrollera med 'tools/fit_cells.py captures/<serie> --read'.")
     return 0
 
 
@@ -899,7 +785,7 @@ def build_parser() -> argparse.ArgumentParser:
     cal.add_argument("--roi", help="x1,y1,x2,y2 (annars foreslas ett)")
     cal.add_argument("--digits", type=int, help="antal siffror pa displayen")
     cal.add_argument("--save", action="store_true", help="spara kalibreringen")
-    cal.add_argument("--frames", type=int, default=8, help="antal bilder i tidsstacken")
+    cal.add_argument("--frames", type=int, default=16, help="antal bilder i serien")
     cal.add_argument("--interval", type=float, default=1.0, help="sekunder mellan bilderna")
     cal.set_defaults(func=cmd_calibrate)
 

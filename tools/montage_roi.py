@@ -22,13 +22,18 @@ def main() -> int:
     p.add_argument("--roi", required=True, help="x1,y1,x2,y2")
     p.add_argument("--scale", type=float, default=6.0)
     p.add_argument("--out", type=Path, help="utfil (default: mappen/_montage.png)")
+    p.add_argument("--every", type=int, default=1, help="ta med var n:te bild (1 = alla)")
+    p.add_argument("--files", help="bara dessa filnamn, kommaseparerade")
     p.add_argument("--label", action="store_true", help="rita filnamn till vanster")
     args = p.parse_args()
 
     x1, y1, x2, y2 = (int(v) for v in args.roi.split(","))
     files = sorted(
         f for f in args.folder.iterdir() if f.suffix.lower() in {".jpg", ".jpeg", ".png"}
-    )
+    )[:: max(1, args.every)]
+    if args.files:
+        wanted = {name.strip() for name in args.files.split(",")}
+        files = [f for f in files if f.name in wanted]
     if not files:
         print(f"Inga bilder i {args.folder}")
         return 2

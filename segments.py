@@ -51,22 +51,41 @@ DIGIT_MASKS: dict[str, int] = {
 
 # Segmentens utbredning som andel av siffercellens bredd/hojd.
 #
-# Den vertikala stapeln i en sjusegmentsiffra ligger i cellens yttre fjardedel,
-# sa fons­tren for f/b/e/c tacker hela 0.00-0.26 respektive 0.74-1.00 i x-led.
+# Fonstren ar matt pa den verkliga displayen med tools/probe_cell.py, som
+# skriver ut cellen som en teckenkarta. Displayen gloder kraftigt: en nolla
+# bestar av en tat vansterkolumn (x 0.09-0.40), ett hal (x 0.40-0.63, y
+# 0.25-0.70) och en tat hogerkolumn (x 0.64-0.98). Halet ar alltsa bara ~23 %
+# av bredden och sitter i mitten - det ar dar mittensegmentets fonster maste
+# ligga. Lag det langre at vanster (som 0.28-0.45) hamnar det pa den vanstra
+# stapeln, och da lases varje nolla som en atta.
 #
-# Mittensegmentet (g) maste daremot vara smalt och ligga i mitten. Ett brett
-# fonster nar anda fram till siffrans bada sidostavar, och eftersom vardet tas
-# som 75:e percentilen racker det att andarna ar ljusa for att segmentet ska
-# anses lysa. Da lases hålet i en nolla som tillslaget och siffran blir en
-# atta - precis det som gjorde att displayen alltid lastes som "888".
+# Sidofonstren (f/e och b/c) haller sig innanfor staplarna och en bit fran
+# cellkanten: strax utanfor cellen sitter displayens kolon, och dess glod nar
+# in over kanten och tander ett slakt segment.
 SEGMENT_BOXES: dict[str, tuple[float, float, float, float]] = {
     "a": (0.18, 0.04, 0.45, 0.17),
-    "f": (0.02, 0.20, 0.26, 0.44),
-    "b": (0.74, 0.20, 0.98, 0.44),
-    "g": (0.28, 0.44, 0.45, 0.57),
-    "e": (0.02, 0.56, 0.26, 0.80),
-    "c": (0.74, 0.56, 0.98, 0.80),
+    "f": (0.12, 0.24, 0.32, 0.38),
+    "b": (0.70, 0.24, 0.88, 0.38),
+    "g": (0.46, 0.45, 0.58, 0.55),
+    "e": (0.12, 0.62, 0.32, 0.76),
+    "c": (0.70, 0.62, 0.88, 0.76),
     "d": (0.18, 0.83, 0.45, 0.96),
+}
+
+# Vilken percentil som anvands inom varje fonster.
+#
+# 75:e percentilen ar mindre kanslig an medelvardet for ett par morka pixlar i
+# kanten av ett tant segment. Mittensegmentet (g) ar undantaget: dar ar fragan om
+# HALET i en nolla ar helt fyllt, och en glodande kant in i halet ska inte raknas
+# som tant segment. Darfor mats aven den nedre delen av fonstret.
+SEGMENT_PERCENTILE: dict[str, float] = {
+    "a": 75.0,
+    "f": 75.0,
+    "b": 75.0,
+    "g": 30.0,
+    "e": 75.0,
+    "c": 75.0,
+    "d": 75.0,
 }
 
 # Hur mycket fel en siffra far ha for att anda godtas (RMSE i normaliserad skala).
@@ -116,19 +135,41 @@ def segment_values(cell: np.ndarray) -> dict[str, float]:
     values: dict[str, float] = {}
 
     for name, (fx1, fy1, fx2, fy2) in SEGMENT_BOXES.items():
-        x1 = int(round(fx1 * w))
-        x2 = max(x1 + 1, int(round(fx2 * w)))
-        y1 = int(round(fy1 * h))
-        y2 = max(y1 + 1, int(round(fy2 * h)))
-        patch = cell[y1:y2, x1:x2]
-        if patch.size == 0:
+        patch = segment_patch(cell, name)
+        if patch is None:
             values[name] = 0.0
             continue
-        # 75:e percentilen ar mindre kanslig an medelvardet for att ett par
-        # morka pixlar i kanten ska dra ner ett tat segment.
-        values[name] = float(np.percentile(patch, 75))
+        values[name] = float(np.percentile(patch, SEGMENT_PERCENTILE.get(name, 75.0)))
 
     return values
+
+
+def segment_patch(cell: np.ndarray, name: str) -> np.ndarray | None:
+    """Utsnittet av cellen dar segmentet mats."""
+    h, w = cell.shape[:2]
+    fx1, fy1, fx2, fy2 = SEGMENT_BOXES[name]
+    x1 = int(round(fx1 * w))
+    x2 = max(x1 + 1, int(round(fx2 * w)))
+    y1 = int(round(fy1 * h))
+    y2 = max(y1 + 1, int(round(fy2 * h)))
+    patch = cell[y1:y2, x1:x2]
+    return patch if patch.size else None
+
+
+def hole_is_filled(cell: np.ndarray, peak: float) -> float:
+    """Hur stor del av halet som ar nastan lika ljust som cellens ljusaste segment.
+
+    Fragan for mittensegmentet ar inte "hur ljust ar det har" utan "ar HALET i
+    en nolla helt fyllt". Gloden runt segmenten varierar mellan bilderna och
+    smetar in i halet, sa ett matt pa ljusnivan kan hamna over troskeln och gora
+    en nolla till en atta. I stallet mats hur stor del av fonstret som ar nastan
+    lika ljust som det ljusaste segmentet: en tаnd mittstapel ar mattad och ger
+    ~1.0, ett hal som bara gloder ger en brakdel.
+    """
+    patch = segment_patch(cell, "g")
+    if patch is None or peak <= 0.0:
+        return 0.0
+    return float(np.count_nonzero(patch >= 0.75 * peak)) / float(patch.size)
 
 
 def values_to_vector(values: dict[str, float]) -> np.ndarray:
@@ -174,6 +215,13 @@ def decode_cell(
     # Normalisera sa att det ljusaste segmentet blir 1.0 - daligt ljus paverkar
     # da inte trosklingen.
     vector = np.clip(vector / peak, 0.0, 1.0)
+
+    # Nu finns en verklig siffra i cellen, sa mittensegmentet avgors med
+    # halmatet: ett hal som gloder svagt ar inte ett tant segment. Mattet ar
+    # redan en andel av cellens ljusaste segment och skalas darfor inte med
+    # `peak` som de andra.
+    values["g"] = hole_is_filled(cell, peak)
+    vector[_SEGMENT_ORDER.index("g")] = float(values["g"])
 
     scored: list[tuple[float, str]] = []
     for char, ideal in IDEAL.items():

@@ -31,9 +31,10 @@ Några saker som gör läsningen tillförlitlig:
 
 | Problem | Lösning |
 |---|---|
-| Siffrorna är bara några tiotal pixlar höga | Cellerna hittas automatiskt och rutnätet passas in med en sökning |
-| En **etta** lyser bara i cellens högra halva | Rutnätets läge söks av, det antas inte vara jämnt fördelat |
-| En **nolla** kan klyvas och se ut som två ettor | Rutnät som skär genom tända segment straffas |
+| Kameran ser panelen snett, så **sifferraden lutar** — sista siffran sitter ~35 px lägre i bilden än den första | Varje sifferposition mäts för sig, både i x och i y. Ett rutnät på gemensam höjd lägger mätfönstren fel på de högra siffrorna |
+| En **nolla** läses som en åtta | Mittensegmentet avgörs av om **hålet** i nollan är fyllt, inte av ljusnivån — glöden kring segmenten varierar mellan bilderna |
+| En **etta** lyser bara i cellens högra halva | Cellens bredd tas från de positioner som visar en hel siffra, och cellen högerställs mot den uppmätta klumpen |
+| Glöden runt siffrorna och **kolonets** glöd smetar in i granncellen | Mätfönstren ligger innanför cellkanten, inte ut mot den |
 | Pumphuset är ljust och stort | Ytor över 30 % av utsnittet förkastas, siffrorna är små |
 | En jämngrå yta kan se ut som "alla segment lyser" | Cellen kräver kontrast, annars rapporteras inget värde |
 | Reflektionen i displayglaset | Klipps bort med `CLIP_BOTTOM`, eller undviks genom att tippa kameran |
@@ -62,11 +63,16 @@ skrivas `run.cmd main.py ...` i stället för `python main.py ...`.
 
 Det här är den enskilt viktigaste faktorn för att läsningen ska bli pålitlig.
 
-* **Placera kameran 25–40 cm från displayen, rakt framifrån.** Snedbild trycker ihop
-  siffrorna och ger perspektivfel.
-* **Sifferraden bör vara minst ~120 px bred** i den 2048 px breda bilden, alltså ca
-  40 px per siffra. Det ger tillräckligt många pixlar per segment.
-  Kör `run.cmd main.py diagnose` — den säger till om det räcker.
+* **Placera kameran 25–40 cm från displayen.** Snedbild trycker ihop siffrorna, men
+  snedbild är också vad kameran ser när den sitter som den gör — sifferraden lutar då
+  ~35 px över hela raden. Programmet mäter varje position för sig och klarar det.
+* **Sifferraden bör vara minst ~60 px per siffra** i den 2048 px breda bilden. Kameran
+  står nu så att siffrorna är ~95–100 px breda. Kör `run.cmd main.py diagnose` — den
+  säger till om det räcker.
+* **Hela raden måste rymmas i `CALIBRATION_ROI`.** Klipper utsnittet första eller sista
+  siffran blir cellen för liten och förskjuten; `main.py calibrate` varnar om det.
+* **Kameran måste sitta fast.** Vibrationer och att någon stöter till den flyttar
+  mätfönstren. Flyttas kameran: mät om med `main.py calibrate --frames 16 --save`.
 * **Sätt displayen i bildens mitt.** Billiga kameror är påtagligt suddigare i
   hörnen, och displayen hamnar lätt där annars.
 * **Tippa kameran 5–10°** så att du inte ser displayglaset rakt i reflex — annars
@@ -75,8 +81,8 @@ Det här är den enskilt viktigaste faktorn för att läsningen ska bli pålitli
 
 ## Kalibrering
 
-Kalibreringen talar om var i bilden siffrorna sitter. Den behöver bara göras om när
-kameran flyttats.
+Kalibreringen talar om var i bilden siffrorna sitter. Den behöver göras om när kameran
+flyttats — även några centimeter märks, för då flyttar mätfönstren.
 
 1. **Titta på ett utsnitt:**
 
@@ -85,19 +91,35 @@ kameran flyttats.
    ```
 
    Öppna `captures/peek.png`. Flytta `CALIBRATION_ROI` i `.env` och kör igen tills
-   utsnittet sitter runt siffrorna. `captures/last_snapshot.jpg` visar hela bilden.
+   utsnittet rymmer **hela** sifferraden med marginal — annars klipps första eller sista
+   siffran och då blir dess mätfönster fel. `captures/last_snapshot.jpg` visar hela bilden.
 
-2. **Låt programmet hitta rutnätet:**
+2. **Mät sifferpositionerna:**
 
    ```powershell
-   run.cmd main.py calibrate --save
+   run.cmd main.py calibrate --frames 16 --save
    ```
 
-   Du får ut vad displayen läses som just nu, konfidens per siffra och vilka segment som
-   lyser. Kontrollera `captures/calibrate_*_roi.png` — de gröna rutorna ska sitta runt
-   varsin siffra och de röda runt hela sifferraden.
+   Sexton bilder behövs: displayen växlar mellan klockan, spoltiden och värdena, och
+   tillsammans visar bilderna alla fyra positionerna. Kommandot skriver ut var varje
+   position sitter och hur den läses just nu.
 
-3. **Kontrollera läsningen över tid:**
+   Kontrollera `captures/calibrate_*_segments.png`: där ligger de sju mätfönstren per
+   siffra ovanpå tidsstacken. **Grön ruta = avläsaren tycker att segmentet lyser.** Sitter
+   rutorna på segmenten är geometrin rätt; hamnar de bredvid syns det direkt.
+
+3. **Kontrollera läsningen mot verkliga bilder:**
+
+   ```powershell
+   run.cmd tools/grab.py --frames 16 --out captures/s2
+   run.cmd tools/fit_cells.py captures/s2 --read
+   ```
+
+   Den skriver ut vad varje bild lästes som. Displayen växlar vy hela tiden, så det är
+   normalt att raderna visar olika tal — men de ska vara *rimliga*: klockan som ett
+   klockslag, spoltiden som `02:00`, och värdena som tresiffriga tal (t.ex. `010` = 0.10).
+
+4. **Kontrollera över tid:**
 
    ```powershell
    run.cmd main.py read --seconds 20        # läs nu
@@ -113,7 +135,7 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `main.py version` | Visar version och aktuell konfiguration |
 | `main.py probe` | Testar att kameran svarar och sparar en bild |
 | `main.py peek` | Sparar ett förstorat utsnitt av displayen |
-| `main.py calibrate --save` | Hittar och sparar sifferrutnätet |
+| `main.py calibrate --frames 16 --save` | Mäter och sparar sifferpositionerna |
 | `main.py read --seconds 20` | Läser displayen nu |
 | `main.py watch` | Följer displayen live som text i terminalen |
 | `main.py lamp on\|off\|state` | Testar lampan via Home Assistant |
@@ -240,14 +262,20 @@ Kolonet används när den visar sin egen klocka (`5:28`), punkten när den visar
 
 Sifferpositionerna mättes upp i en verklig bild:
 
-| Siffra | x-position i bilden |
-|---|---|
-| 1 | 1126–1203 |
-| 2 | 1234–1332 |
-| 3 | 1351–1448 |
+| Position | x i bilden | y i bilden |
+|---|---|---|
+| 1 | 1001–1092 | 0–99 |
+| 2 | 1116–1211 | 9–108 |
+| 3 | 1230–1328 | 21–120 |
+| 4 | 1345–1444 | 36–134 |
 
-Sifferraden är ~320 px bred och siffrorna ~120 px höga. Det är gott om marginal —
-kravet är minst ~120 px för hela raden.
+Raden **lutar** alltså: position 4 sitter ~35 px lägre i bilden än position 1. Det är
+därför varje position har sin egen höjd i `calibration.json` — ett rutnät på gemensam
+höjd lägger mätfönstren fel på de högra siffrorna. Siffrorna är ~95–100 px breda, alltså
+gott om marginal (kravet är minst ~60 px per siffra).
+
+Tabellen ovan gäller kamerans läge 2026-09-20. Flyttas kameran görs en ny mätning med
+`main.py calibrate --frames 16 --save`, och då skrivs `calibration.json` om.
 
 Använd `tools/measure_display.py` för att mäta om detta om kameran flyttas:
 
@@ -258,27 +286,50 @@ run.cmd tools/measure_display.py captures\last_snapshot.jpg
 Den skriver ut kolumnprofilen som siffror i stället för att man ska gissa ur en bild.
 Det var så sifferantalet fastställdes.
 
+`tools/probe_cell.py` skriver en siffercell som en teckenkarta, så att man ser var
+segmenten och hålet i en nolla faktiskt sitter:
+
+```powershell
+run.cmd tools/probe_cell.py captures/s2/000_152050.jpg --cell 2
+```
+
+Det var så mätfönstren i `segments.py` hamnade rätt.
+
 ## Verifierat och inte verifierat
 
-**Verifierat:** kameravägen (snapshot i full upplösning), bildbehandlingen, och att
-segmenttolkningen läser **rätt siffror** ur en verklig bild. Avläsaren fick ut `5`, `2`
-och `8` korrekt ur en bild där displayens klocka visade `5:28`.
+**Verifierat 2026-09-20** mot verkliga bilder (54 stycken, tagna med en sekunds mellanrum):
 
-**Inte verifierat:** att kalibreringen sitter stabilt över tid. Displayen växlar mellan
-många olika vyer, och ett fast rutnät som passar en vy passar inte alltid nästa. Vid en
-testkörning läste den `888` i kalibreringsbilden men gav osäkra värden i de följande
-bilderna. **Värdet från 02:00 går därför inte att lita på ännu.**
+| Vy | Displayen visar | Läsaren får ut |
+|---|---|---|
+| klockan | `15:15`, `18:16` | `1515`, `1816` — rätt siffror |
+| spoltiden | `02:00` | `0200` |
+| värdet | `0.10` | `010` (0.10 med `DECIMALS=2`) |
+| värdet | `0.00` | `000` |
 
-Nästa steg är att låsa tidpunkten 02:00 mot displayens faktiska växling — antingen genom
-att se vad displayen visar precis då, eller genom att styra kameran mot en vy som står
-stilla tillräckligt länge.
+Klockslagen och spoltiden har alla fyra positioner tända och förkastas därför av
+`REQUIRE_BLANK_FIRST` — bara värdevyerna, där första positionen är släckt, kan bli ett
+publicerat värde. Det var så det var tänkt, och det håller.
+
+Att en nolla kan läsas som en åtta var det fel som kostade mest tid: nollans hål ligger på
+x 0.40–0.63 i cellen, men mätfönstret låg på 0.28–0.45 och träffade den vänstra stapeln.
+Glöden kring segmenten varierar dessutom mellan bilderna, så ljusnivån räckte inte som
+mått. Nu avgörs mittensegmentet av hur stor del av hålet som är fyllt.
+
+**Inte verifierat:** en hel nattkörning klockan 02:00 med MQTT och lampa på plats.
+Värdevyerna `0.10` och `0.00` fångades dagtid; att just "liter kvar" står kvar i 10–12 s
+strax efter 02:00 är känt från displayen men inte mätt av programmet än.
 
 ## Kända begränsningar
 
-* Avläsaren är en heuristik. Ett testfall är markerat `xfail`: en ljus ram som rör vid
-  ROI:ts kanter kan förskjuta rutnätet. Håll därför ROI:t tätt runt siffrorna.
-* Ligger sifferraden under ~120 px bred i bilden blir läsningen osäker. Se
-  avsnittet om kamerans placering ovan.
+* Avläsaren är en heuristik byggd för den här displayen: mätfönstren i `segments.py` är
+  uppmätta mot hur segmenten och hålet i en nolla faktiskt ser ut där.
+* Kameran måste sitta fast. Flyttas den mer än några pixlar hamnar mätfönstren fel, och
+  då ger läsningen inget värde — den publicerar hellre inget än ett felaktigt värde.
+  Kör `main.py calibrate --frames 16 --save` efter en flytt.
+* Klipper `CALIBRATION_ROI` någon siffra blir cellen för liten och förskjuten. Programmet
+  varnar ("en siffra ror vid ROI:ts kant") och `main.py calibrate` visar det direkt.
+* Ligger sifferraden under ~60 px per siffra blir läsningen osäker. Se avsnittet om
+  kamerans placering ovan.
 
 ## Drift på servern
 

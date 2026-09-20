@@ -17,6 +17,7 @@ import json
 import logging
 from collections import Counter
 from dataclasses import asdict, dataclass, field
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -81,6 +82,10 @@ class Reading:
     error: str = ""
     # Antal decimaler i vardet, sa att "122" blir 1.22.
     decimals: int = 0
+    # Hur manga bilder lasningen vilar pa. Att lagga ihop lika bilder och tolka
+    # medelvardesbilden tar bort brus, men da maste rosten vaga lika tungt som
+    # antalet bilder - annars kan tio bilder av samma varde bara bli en rost.
+    weight: int = 1
 
     @property
     def numeric(self) -> float | None:
@@ -649,6 +654,259 @@ def save_reference(normalized: np.ndarray, path: str) -> None:
     cv2.imwrite(str(path), np.clip(normalized * 255.0, 0.0, 255.0).astype("uint8"))
 
 
+# ---------------------------------------------------------------------------
+# Matning av siffercellerna (kalibreringen)
+# ---------------------------------------------------------------------------
+
+
+def half_max_box(gray: np.ndarray, box: Box) -> Box:
+    """Drar at en klumps ruta till halvvardesbredden pa den glodande kanten.
+
+    `gray` ar den normaliserade bilden (1.0 = ljusast). Halvvardesbredden ligger
+    mitt i glodens kant och flyttar sig darfor mycket mindre an troskelns kant
+    nar ljuset andras.
+    """
+    x1, y1, x2, y2 = box
+    region = gray[y1:y2, x1:x2]
+    if region.size == 0:
+        return box
+
+    def extent(profile: np.ndarray, offset: int) -> tuple[int, int]:
+        peak = float(profile.max())
+        if peak <= 0.0:
+            return offset, offset + len(profile)
+        lit = np.flatnonzero(profile >= 0.5 * peak)
+        if lit.size == 0:
+            return offset, offset + len(profile)
+        return offset + int(lit[0]), offset + int(lit[-1]) + 1
+
+    left, right = extent(region.max(axis=0), x1)
+    top, bottom = extent(region.max(axis=1), y1)
+    return left, top, right, bottom
+
+
+def glyph_boxes(image: np.ndarray, roi: Box, cfg: ReaderConfig) -> list[Box]:
+    """Sifferklumparna i en bild, i ROI-koordinater och uppskalade pixlar."""
+    reader = replace(cfg, reference_file="")
+    normalized, binary = preprocess(image, roi, reader)
+    binary = clean_binary(binary)
+    band = find_band(binary)
+    band_height = band[3] - band[1]
+    height, width = binary.shape[:2]
+
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    found: list[Box] = []
+    for label in range(1, count):
+        x, y, component_width, component_height, area = stats[label]
+        if area < 20 or component_height < 0.45 * band_height:
+            continue
+        # En siffra som ror vid ROI:ts kant ar klippt. Da blir cellen for liten
+        # och forskjuten, och lasningen blir fel utan att nagon siffra ser
+        # konstig ut. Det ska upptacks direkt.
+        if x <= 1 or y <= 1 or x + component_width >= width - 1 or y + component_height >= height - 1:
+            log.warning(
+                "en siffra ror vid ROI:ts kant och klipps - utoka CALIBRATION_ROI"
+            )
+        found.append(
+            half_max_box(
+                normalized,
+                (int(x), int(y), int(x + component_width), int(y + component_height)),
+            )
+        )
+    found.sort(key=lambda item: item[0])
+    return found
+
+
+def to_internal(boxes: list[Box], roi: Box, scale: float) -> list[Box]:
+    """Helbildens koordinater -> ROI:t, uppskalat (samma rymd som klumparna)."""
+    return [
+        (
+            int(round((x1 - roi[0]) * scale)),
+            int(round((y1 - roi[1]) * scale)),
+            int(round((x2 - roi[0]) * scale)),
+            int(round((y2 - roi[1]) * scale)),
+        )
+        for x1, y1, x2, y2 in boxes
+    ]
+
+
+def to_absolute(boxes: list[Box], roi: Box, scale: float) -> list[Box]:
+    """ROI:t, uppskalat -> helbildens koordinater."""
+    return [
+        (
+            int(round(roi[0] + x1 / scale)),
+            int(round(roi[1] + y1 / scale)),
+            int(round(roi[0] + x2 / scale)),
+            int(round(roi[1] + y2 / scale)),
+        )
+        for x1, y1, x2, y2 in boxes
+    ]
+
+
+def measure_cells(
+    images: list[np.ndarray],
+    roi: Box,
+    cfg: ReaderConfig,
+    digit_count: int,
+    *,
+    prior: list[Box] | None = None,
+) -> tuple[list[Box], list[str]]:
+    """Mater en cellruta per sifferposition. Returnerar (absoluta rutor, rapport).
+
+    Kameran ser panelen snett, sa sifferraden lutar: sista siffran sitter
+    nagra tiotal pixlar lagre i bilden an den forsta. Ett rutnat som antar att
+    alla celler ligger pa samma hojd lagger matfonstren fel pa de hogra
+    siffrorna, och da lases de fel (ofta som attor). Darfor mats varje position
+    for sig - bade i x och i y.
+
+    Varje bild tolkas for sig och varje sifferklump matas med halvvardesbredd.
+    Klumparna laggs sedan ihop per position, sa att aven en position som bara
+    visar en smal etta nagon gang far sin fulla bredd.
+
+    `prior` ar sifferpositionerna fran en tidigare kalibrering (x-led ar
+    palitligt darifran). Utan den maste bilderna visa alla positioner samtidigt.
+    """
+    scale = cfg.upscale if cfg.upscale else 1.0
+    report: list[str] = []
+
+    prior_internal = to_internal(prior, roi, scale) if prior else None
+    if prior_internal and len(prior_internal) == digit_count:
+        centers = [(box[0] + box[2]) / 2.0 for box in prior_internal]
+    else:
+        centers = []
+        for image in images:
+            for box in glyph_boxes(image, roi, cfg):
+                centers.append((box[0] + box[2]) / 2.0)
+        if len(centers) < 2:
+            raise ReaderError("hittade inga siffror i bilderna")
+        low, high = min(centers), max(centers)
+        centers = [
+            low + index * (high - low) / (digit_count - 1) for index in range(digit_count)
+        ]
+
+    pitch = (centers[-1] - centers[0]) / max(1, digit_count - 1)
+    report.append("positionernas x : " + "  ".join(f"{center:.0f}" for center in centers))
+    report.append(f"stigning        : {pitch / scale:.1f} px")
+
+    per_slot: list[list[Box]] = [[] for _ in range(digit_count)]
+    for image in images:
+        for box in glyph_boxes(image, roi, cfg):
+            center_x = (box[0] + box[2]) / 2.0
+            index = int(np.argmin([abs(center_x - center) for center in centers]))
+            if abs(center_x - centers[index]) > 0.6 * pitch:
+                continue
+            per_slot[index].append(box)
+
+    for index, boxes in enumerate(per_slot, start=1):
+        report.append(f"position {index}    : {len(boxes)} matningar")
+
+    # Cellens storlek mats ur alla klumpar i serien. Den tas hogt ur
+    # fordelningen (90:e percentilen) och inte som ett medianvarde: siffrorna i
+    # den har displayen ar inte lika breda - en nolla ar ~95 px medan en sjua ar
+    # ~80 px - och det ar den bredaste typen som visar hur bred cellen ar. En
+    # cell som ar for smal lagger matfonstren innanfor segmenten, och en som ar
+    # for bred lagger dem utanfor.
+    all_widths = [box[2] - box[0] for boxes in per_slot for box in boxes]
+    all_heights = [box[3] - box[1] for boxes in per_slot for box in boxes]
+    if not all_widths or not all_heights:
+        raise ReaderError("hittade inga siffror i bilderna")
+
+    cell_w = min(float(np.percentile(all_widths, 90)), 1.15 * pitch)
+    cell_h = float(np.percentile(all_heights, 90))
+    report.append(f"cellstorlek     : {cell_w / scale:.0f} x {cell_h / scale:.0f} px")
+    if max(all_widths) < 0.6 * pitch:
+        report.append("  (bara ettor i serien - ta fler bilder sa att cellens bredd syns)")
+
+    known = [index for index, boxes in enumerate(per_slot) if boxes]
+    slope = None
+    if len(known) >= 2:
+        slope = np.polyfit(
+            np.array(known, dtype=np.float64),
+            np.array(
+                [
+                    float(np.median([(box[1] + box[3]) / 2.0 for box in per_slot[i]]))
+                    for i in known
+                ],
+                dtype=np.float64,
+            ),
+            1,
+        )
+
+    cells: list[Box] = []
+    for index in range(digit_count):
+        boxes = per_slot[index]
+        if boxes:
+            center_y = float(np.median([(box[1] + box[3]) / 2.0 for box in boxes]))
+            right = float(np.median([box[2] for box in boxes]))
+            width = cell_w
+        elif slope is not None:
+            center_y = float(np.polyval(slope, index))
+            right = centers[index] + cell_w / 2.0
+            width = cell_w
+            report.append(f"position {index + 1}    : ingen matning - hojden forlangd ur grannarna")
+        else:
+            raise ReaderError(f"position {index + 1} syntes inte i nagon bild")
+
+        cells.append(
+            (
+                int(round(right - width)),
+                int(round(center_y - cell_h / 2.0)),
+                int(round(right)),
+                int(round(center_y + cell_h / 2.0)),
+            )
+        )
+
+    return to_absolute(cells, roi, scale), report
+
+
+def load_cell_boxes(path: Path) -> list[Box] | None:
+    """Sifferpositionerna ur en tidigare kalibrering.
+
+    Anvands som "prior" vid en ny matning: lagen i x-led ar palitliga, sa de
+    gor att positionerna hittas aven om bara nagra av dem lyser i serien.
+    """
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        boxes = [tuple(int(value) for value in box) for box in data["cell_boxes"]]
+    except (KeyError, ValueError, TypeError):
+        return None
+    return boxes or None
+
+
+def draw_cells_overlay(image: np.ndarray, roi: Box, cells: list[Box], cfg: ReaderConfig) -> np.ndarray:
+    """Ritar cellrutor och de sju matfonstren ovanpa bilden (en kontrollbild).
+
+    Gron ruta = avlasaren tycker att segmentet lyser. Sitter rutorna pa
+    segmenten ar geometrin ratt; hamnar de bredvid syns det direkt.
+    """
+    from segments import SEGMENT_BOXES, segment_values
+
+    normalized, _binary = preprocess(image, roi, replace(cfg, reference_file=""))
+    scale = cfg.upscale if cfg.upscale else 1.0
+    canvas = cv2.cvtColor((normalized * 255).astype("uint8"), cv2.COLOR_GRAY2BGR)
+
+    for ax1, ay1, ax2, ay2 in cells:
+        cx1 = int(round((ax1 - roi[0]) * scale))
+        cy1 = int(round((ay1 - roi[1]) * scale))
+        cx2 = int(round((ax2 - roi[0]) * scale))
+        cy2 = int(round((ay2 - roi[1]) * scale))
+        if cx2 <= cx1 or cy2 <= cy1:
+            continue
+        values = segment_values(normalized[cy1:cy2, cx1:cx2])
+        for name, (fx1, fy1, fx2, fy2) in SEGMENT_BOXES.items():
+            sx1 = cx1 + int(round(fx1 * (cx2 - cx1)))
+            sx2 = cx1 + max(1, int(round(fx2 * (cx2 - cx1))))
+            sy1 = cy1 + int(round(fy1 * (cy2 - cy1)))
+            sy2 = cy1 + max(1, int(round(fy2 * (cy2 - cy1))))
+            colour = (0, 255, 0) if values.get(name, 0.0) > 0.5 else (0, 0, 255)
+            cv2.rectangle(canvas, (sx1, sy1), (sx2, sy2), colour, 1)
+        cv2.rectangle(canvas, (cx1, cy1), (cx2, cy2), (255, 255, 0), 1)
+
+    return canvas
+
+
 def read_image(
     image: np.ndarray,
     cal: Calibration,
@@ -683,15 +941,29 @@ def read_image(
     if cal.cell_boxes:
         scale = cfg.upscale if cfg.upscale else 1.0
         x1, y1 = cal.roi[0], cal.roi[1]
-        boxes = [
-            (
-                int(round((bx1 - x1) * scale)),
-                int(round((by1 - y1) * scale)),
-                int(round((bx2 - x1) * scale)),
-                int(round((by2 - y1) * scale)),
+        image_height, image_width = normalized.shape[:2]
+        boxes = []
+        for bx1, by1, bx2, by2 in cal.cell_boxes:
+            cx1 = int(round((bx1 - x1) * scale))
+            cy1 = int(round((by1 - y1) * scale))
+            cx2 = int(round((bx2 - x1) * scale))
+            cy2 = int(round((by2 - y1) * scale))
+            # En cell som ligger utanfor bilden far aldrig bli en negativ
+            # skiva - da vander indexeringen och cellen blir tom utan att nagon
+            # siffra ser konstig ut. Klipp mot bilden och saga till.
+            if cx2 <= 0 or cy2 <= 0 or cx1 >= image_width or cy1 >= image_height:
+                log.warning(
+                    "cellen %s,%s,%s,%s ligger utanfor bilden - kontrollera CALIBRATION_ROI",
+                    bx1, by1, bx2, by2,
+                )
+            boxes.append(
+                (
+                    max(0, min(image_width, cx1)),
+                    max(0, min(image_height, cy1)),
+                    max(0, min(image_width, cx2)),
+                    max(0, min(image_height, cy2)),
+                )
             )
-            for bx1, by1, bx2, by2 in cal.cell_boxes
-        ]
     else:
         band = find_band(binary)
         # Rutnatet passas in en gang och sparas i kalibreringen. Sedan laser vi
@@ -780,23 +1052,31 @@ def consensus(
     min_confidence: float = 0.75,
     decimals: int = 0,
 ) -> Consensus:
-    """Rostar fram det varde som flest lasningar ar eniga om."""
-    usable = [r for r in readings if r.ok and r.confidence >= min_confidence and r.value]
-    if not usable:
-        return Consensus(value=None, votes=0, total=len(readings), confidence=0.0, decimals=decimals)
+    """Rostar fram det varde som flest lasningar ar eniga om.
 
-    votes = Counter(r.value for r in usable)
+    Varje lasning vager sa tungt som antalet bilder bakom den, sa att en grupp
+    av lika bilder raknas som lika manga roster.
+    """
+    usable = [r for r in readings if r.ok and r.confidence >= min_confidence and r.value]
+    total = sum(max(1, r.weight) for r in readings)
+    if not usable:
+        return Consensus(value=None, votes=0, total=total, confidence=0.0, decimals=decimals)
+
+    votes: Counter[str] = Counter()
+    for reading in usable:
+        votes[reading.value] += max(1, reading.weight)
+
     value, count = votes.most_common(1)[0]
     if count < min_agreement:
         return Consensus(
-            value=None, votes=count, total=len(readings), confidence=0.0, decimals=decimals
+            value=None, votes=count, total=total, confidence=0.0, decimals=decimals
         )
 
     agreeing = [r for r in usable if r.value == value]
     confidence = float(np.mean([r.confidence for r in agreeing]))
 
     return Consensus(
-        value=value, votes=count, total=len(readings), confidence=confidence, decimals=decimals
+        value=value, votes=count, total=total, confidence=confidence, decimals=decimals
     )
 
 
@@ -898,6 +1178,7 @@ def read_crops(
         averaged = average_crops(crops, indices)
         image = image_from_crop(averaged, cal.roi)
         reading = read_image(image, cal, cfg, timestamp=float(len(indices)))
+        reading.weight = len(indices)
         readings.append(reading)
 
     return readings
