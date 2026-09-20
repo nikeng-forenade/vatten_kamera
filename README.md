@@ -345,6 +345,17 @@ cd C:\vatten_kamera
 Vid fel skrivs allt till loggen och — om `NOTIFY_ON_FAILURE=true` — en notis skickas till
 Home Assistant.
 
+**Tiden som gäller är pumpens egen klocka, inte datorns.** Spolningen startar när
+pumpens klocka slår det klockslag displayen visar (`02:00`), och pumpens klocka går
+efter — mätt 2026-09-20 visade den 15:15 klockan 15:20:25 och 18:32 klockan 18:37:53,
+alltså **~5 minuter efter**. Därför står `RUN_AT=02:05:30` i `.env`. Har du ställt
+pumpens klocka rätt sätter du tillbaka `RUN_AT` till `02:00:00`.
+
+Kontrollera avvikelsen själv: kör `run.cmd main.py watch --minutes 3` och jämför
+klockslaget som visas med vad klockan är.
+
+
+
 Varje körning sparas i `captures/runs/<datum>/` med bilderna och en `summary.json`,
 så det går att gå tillbaka och se exakt vad kameran såg den natten.
 
