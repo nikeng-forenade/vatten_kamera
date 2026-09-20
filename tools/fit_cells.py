@@ -167,9 +167,25 @@ def main() -> int:
         print(f"matfonster -> {out}   (gron = lyser, rod = slackt)")
 
     if args.read:
+        # Las med de SPARADE cellrutorna, alltsa exakt samma rutor som en riktig
+        # korning anvander. Matningen ovan ar ocksa vard att titta pa, men den
+        # gors pa just den har serien och kan flytta rutorna nagra pixlar - och
+        # da kan en siffra som ligger pa gransen tolkas annorlunda an i skarp
+        # drift, vilket ar missvisande nar man ska kontrollera lasningen.
+        read_calibration = calibration
+        try:
+            saved = Calibration.load(cfg.calibration_file)
+        except ReaderError:
+            saved = None
+        if saved is not None and len(saved.cell_boxes) == cfg.reader.digit_count:
+            read_calibration = saved
+            print("\nlaser med cellrutorna ur " + cfg.calibration_file.name)
+        else:
+            print("\nlaser med de nyss matta cellrutorna (ingen sparad kalibrering finns)")
+
         print("\nlasning per bild:")
         for path, image in frames:
-            reading = read_image(image, calibration, read_cfg)
+            reading = read_image(image, read_calibration, read_cfg)
             chars = "".join(digit.char for digit in reading.digits)
             confidence = " ".join(f"{digit.confidence:.2f}" for digit in reading.digits)
             print(f"  {path.name:<20} {chars!r:<9} [{confidence}]  varde {reading.value!r}"

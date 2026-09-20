@@ -45,7 +45,10 @@ DIGIT_MASKS: dict[str, int] = {
     "6": 1 + 32 + 64 + 16 + 4 + 8,          # 125
     "7": 1 + 2 + 4,                         # 7
     "8": 127,
-    "9": 1 + 2 + 4 + 8 + 32 + 64,           # 111
+    # Displayens nia har ett KORT bottenstreck: det borjar forst vid x 0.47 i
+    # cellen, sa i den vanstra halvan (dar bottenstrecket mats) ar det slackt.
+    # Darmed ar nian har en nia som saknar bottenstreckets vanstra del.
+    "9": 1 + 2 + 4 + 32 + 64,             # a, b, c, f, g
     "-": 64,                                # bara mittensegmentet
 }
 
@@ -69,14 +72,12 @@ SEGMENT_BOXES: dict[str, tuple[float, float, float, float]] = {
     "g": (0.46, 0.45, 0.58, 0.55),
     "e": (0.12, 0.62, 0.32, 0.76),
     "c": (0.70, 0.62, 0.88, 0.76),
-    # Bottenstrecket mats i cellens HOGRA halva. Displayens nia har ett kort
-    # bottenstreck som borjar forst vid x 0.47, sa i vanstra halvan ser nians
-    # bottenstreck slackt ut - nian fick da konfidens 0.07 och ett varde med en
-    # nia i sig kunde aldrig publiceras. Priset for att mata i hogra halvan ar
-    # att ettans stapel (x 0.55-1.0 med glod) tander fonstret, sa en etta far
-    # lagre konfidens (0.15-0.20). Ettan lases anda som en etta, eftersom a, f
-    # och g ar morka hos den. Darfor ar MIN_CONFIDENCE lagt satt i .env.
-    "d": (0.50, 0.83, 0.75, 0.96),
+    # Bottenstrecket mats i cellens VANSTRA halva. Hogra halvan gar inte: dar
+    # lyser bade ettans stapel och sjuan, som har en fot nedtill, sa fonstret
+    # tands av dem (och en sjua lastes som en trea). Priset for att mata till
+    # vanster ar att displayens korta nia saknar bottenstreck dar - det loste vi
+    # i stallet i DIGIT_MASKS.
+    "d": (0.18, 0.83, 0.45, 0.96),
 }
 
 # Vilken percentil som anvands inom varje fonster.
@@ -301,7 +302,13 @@ def render_digit(
     for index, name in enumerate(_SEGMENT_ORDER):
         if not (mask >> index) & 1:
             continue
-        fx1, fy1, fx2, fy2 = RENDER_BOXES[name]
+        box = RENDER_BOXES[name]
+        if char == "9" and name == "d":
+            # Displayens nia har ett KORT bottenstreck som borjar forst vid
+            # x 0.47 i cellen. Renderaren ritar samma sak, sa att testerna mater
+            # mot hur displayen faktiskt ser ut och inte mot ett idealt segment.
+            box = (0.47, box[1], box[2], box[3])
+        fx1, fy1, fx2, fy2 = box
         x1, x2 = int(fx1 * width), int(np.ceil(fx2 * width))
         y1, y2 = int(fy1 * height), int(np.ceil(fy2 * height))
         canvas[y1:y2, x1:x2] = foreground
