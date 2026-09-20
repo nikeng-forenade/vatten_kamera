@@ -207,7 +207,7 @@ Allt kan läsas, ändras och återställas från kommandoraden:
 
 ```powershell
 run.cmd main.py image show                    # visa alla inställningar
-run.cmd main.py image set gain=20 shutter=1/100
+run.cmd main.py image set gain=40 shutter=1/50
 run.cmd main.py image tune                    # prova olika exponeringar och välj den bästa
 run.cmd main.py image restore                 # gå tillbaka till utgångsläget
 ```
@@ -221,7 +221,8 @@ något ändras, så `image restore` kan alltid ta dig tillbaka.
 |---|---|
 | **Dagsläge (`ircut=day`) i stället för nattläge** | Displayen är en röd LED. I svartvitt nattläge brände den ut till en vit klump utan igenkännbara segment. |
 | **Läs blåkanalen, inte gråskala** | Rött ljus har inget blått. I blåkanalen lyser siffrorna medan den röda glöden runt dem blir svart — det ger en ren, skarp bild. Sätts med `COLOR_CHANNEL=b`. |
-| **Hög tröskel (`THRESHOLD=215`)** | Siffrorna är mättade medan spegelbilden i displayglaset är svag. Tröskeln håller spegelbilden borta så att sifferbandet inte blir för högt. |
+| **Hög tröskel (`THRESHOLD=250`)** | Siffrorna är mättade medan spegelbilden i displayglaset är svag. Tröskeln håller spegelbilden borta så att sifferbandet inte blir för högt. |
+| **Mättad exponering, inte "lagom"** | Displayen lyser själv, men i blåkanalen är en röd LED svag — blir siffrorna inte mättade smiter de igenom tröskeln. `main.py image tune` mäter hur långt varje segments ljusnivå ligger från mitten (där tolken inte kan skilja tänt från släckt). Mätt 2026-09-20: **gain 40 + 1/50** gav celler på 95×103 px och värdet `116` med konfidens 0.57–0.62, medan **gain 20 + 1/250** gav en fem gånger mörkare bild där cellerna krympte till 60×88 px och läsningen gav skräp (`1`, `3`, `?4`, `31`). |
 
 ### Läsprofilen — kameran lånas bara under läsningen
 

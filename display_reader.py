@@ -477,6 +477,10 @@ def score_boxes(normalized: np.ndarray, binary: np.ndarray, band: Box, boxes: li
 def detect_cells_by_blobs(binary: np.ndarray, band: Box, digit_count: int) -> list[Box] | None:
     """Hittar siffrorna som egna klumpar i bilden.
 
+    ERSATT av measure_cells(): cellerna mats i stallet per position ur en serie
+    bilder, eftersom sifferraden lutar och ett gemensamt rutnat da hamnar fel.
+    Finns kvar for verktyg som vill gissa ett rutnat utan kalibrering.
+
     Segmenten inne i en siffra sitter tat ihop, medan avstandet mellan tva
     siffror ar mycket storre. Fyller vi igen de sma glappen smalter varje siffra
     ihop till en klump - och da far vi siffrornas exakta lagen utan att behova
@@ -527,6 +531,8 @@ def detect_cells_by_blobs(binary: np.ndarray, band: Box, digit_count: int) -> li
 
 def detect_cells(normalized: np.ndarray, binary: np.ndarray, band: Box, digit_count: int) -> list[Box] | None:
     """Hittar siffercellerna genom att utga fran mellanrummen mellan siffrorna.
+
+    ERSATT av measure_cells() - se kommentaren dar.
 
     Mellan tva siffror pa en sjusegmentsdisplay finns en mork lucka. Vi delar
     bandet jamnt och knapper sedan varje intern cellgrans till den morkaste
@@ -856,7 +862,23 @@ def measure_cells(
             )
         )
 
-    return to_absolute(cells, roi, scale), report
+    absolute = to_absolute(cells, roi, scale)
+
+    # En cell som far negativa koordinater ligger utanfor bilden. Det hander nar
+    # den oversta siffran sitter precis vid bildkanten och hojden forlangs ur
+    # grannarna. Klipp den mot bilden - en negativ skiva vander indexeringen och
+    # ger en tom cell utan att nagon siffra ser konstig ut.
+    height, width = images[0].shape[:2]
+    clamped: list[Box] = []
+    for x1, y1, x2, y2 in absolute:
+        if x1 < 0 or y1 < 0 or x2 > width or y2 > height:
+            report.append(
+                f"  (cellen {x1},{y1},{x2},{y2} klipps mot bildkanten {width}x{height}"
+                " - utoka CALIBRATION_ROI om siffran sitter langt utanfor)"
+            )
+        clamped.append((max(0, x1), max(0, y1), min(width, x2), min(height, y2)))
+
+    return clamped, report
 
 
 def load_cell_boxes(path: Path) -> list[Box] | None:

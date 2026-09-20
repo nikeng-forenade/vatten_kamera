@@ -440,12 +440,13 @@ def cmd_diagnose(cfg: Config, args: argparse.Namespace) -> int:
     stacked = np.max(np.stack(frames), axis=0) if len(frames) > 1 else frames[-1]
     normalized, _binary = preprocess(stacked, roi, cfg.reader)
     scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
+    image_height, image_width = normalized.shape[:2]
     print("\nsegment ur tidsstacken (alla positioner samtidigt):")
     for index, (ax1, ay1, ax2, ay2) in enumerate(calibration.cell_boxes, start=1):
-        cx1 = int(round((ax1 - roi[0]) * scale))
-        cy1 = int(round((ay1 - roi[1]) * scale))
-        cx2 = int(round((ax2 - roi[0]) * scale))
-        cy2 = int(round((ay2 - roi[1]) * scale))
+        cx1 = max(0, min(image_width, int(round((ax1 - roi[0]) * scale))))
+        cy1 = max(0, min(image_height, int(round((ay1 - roi[1]) * scale))))
+        cx2 = max(0, min(image_width, int(round((ax2 - roi[0]) * scale))))
+        cy2 = max(0, min(image_height, int(round((ay2 - roi[1]) * scale))))
         cell = normalized[cy1:cy2, cx1:cx2]
         if cell.size == 0:
             print(f"  position {index}: cellen ligger utanfor bilden")
@@ -666,7 +667,8 @@ def _tune_exposure(cfg: Config, settings: object, args: argparse.Namespace) -> i
     import time
 
     from camera_settings import CameraSettingsError
-    from display_reader import find_band, fit_grid, score_boxes, to_internal
+    from display_reader import to_internal
+    from segments import segment_values
 
     if not cfg.calibration_roi:
         print("FEL: CALIBRATION_ROI maste vara satt i .env for att kunna optimera")
@@ -677,9 +679,10 @@ def _tune_exposure(cfg: Config, settings: object, args: argparse.Namespace) -> i
     scale = cfg.reader.upscale if cfg.reader.upscale else 1.0
     calibration_cells = load_cell_boxes(cfg.calibration_file)
     if not calibration_cells or len(calibration_cells) != digits:
-        calibration_cells = None
-        print("tips: kor 'main.py calibrate --frames 16 --save' forst - da mats")
-        print("      exponeringen mot de riktiga sifferrutorna i stallet for en gissning.\n")
+        print("FEL: ingen kalibrering. Kor 'main.py calibrate --frames 16 --save' forst -")
+        print("     exponeringen mats mot de riktiga sifferrutorna.")
+        return 2
+    boxes = to_internal(calibration_cells, roi, scale)
     settings.backup()  # type: ignore[attr-defined]
     print(f"utgar fran ROI {roi[0]},{roi[1]},{roi[2]},{roi[3]}, {digits} siffror\n")
 
@@ -706,28 +709,14 @@ def _tune_exposure(cfg: Config, settings: object, args: argparse.Namespace) -> i
                     continue
 
                 try:
-                    normalized, binary = preprocess(frame.image, roi, cfg.reader)
-                    band = find_band(binary)
-                    if calibration_cells:
-                        # Rutnatet ar redan kant - poanga hur bra det forklarar
-                        # bilden. Att leta efter ett nytt rutnat har skulle
-                        # belona breda celler, alltsa en sjalvsaker men felaktig
-                        # "atta", och da vinner den mest utbranda exponeringen.
-                        score = score_boxes(
-                            normalized, binary, band, to_internal(calibration_cells, roi, scale)
-                        )
-                    else:
-                        _boxes, score = fit_grid(normalized, binary, band, digits)
+                    score = _crispness(frame.image, roi, cfg, boxes)
                 except ReaderError as exc:
                     print(f"  gain={gain:<4} slutare={shutter:<6} kunde inte tolka: {exc}")
                     continue
 
-                band_size = f"{band[2] - band[0]}x{band[3] - band[1]}"
-                results.append((score, gain.strip(), shutter.strip(), band_size))
-                print(
-                    f"  gain={gain:<4} slutare={shutter:<6} lasbarhet {score:+.3f}"
-                    f"   sifferband {band_size} px"
-                )
+                results.append((score, gain.strip(), shutter.strip(), ""))
+                print(f"  gain={gain:<4} slutare={shutter:<6} skarpa {score:.3f}")
+
     finally:
         camera.close()
 
@@ -736,12 +725,43 @@ def _tune_exposure(cfg: Config, settings: object, args: argparse.Namespace) -> i
         return 1
 
     results.sort(key=lambda item: item[0], reverse=True)
-    best_score, best_gain, best_shutter, band_size = results[0]
-    print(f"\nbasta: gain={best_gain} slutare={best_shutter} (lasbarhet {best_score:+.3f}, band {band_size} px)")
+    best_score, best_gain, best_shutter, _band_size = results[0]
+    print(f"\nbasta: gain={best_gain} slutare={best_shutter} (skarpa {best_score:.3f})")
 
     settings.apply({"gain": best_gain, "shutter": best_shutter})  # type: ignore[attr-defined]
     print("installt. Kontrollera med 'tools/fit_cells.py captures/<serie> --read'.")
     return 0
+
+
+def _crispness(image: np.ndarray, roi: tuple[int, int, int, int], cfg: Config, boxes: list) -> float:
+    """Hur tydligt avlasaren kan se om varje segment lyser eller inte.
+
+    Mattet ar hur langt varje uppmatt segmentvarde ligger fran mitten (0.5), dar
+    tolken inte kan skilja tant fran slackt. Det ar oberoende av vilken siffra
+    displayen rakar visa - en glodande kant som smetar in over troskeln drar ner
+    mattet, oavsett om siffran ar en nolla eller en atta. Att i stallet mata
+    "hur sjalvsaker tolken ar" vore missvisande: en utbrand bild ger matta
+    segment och en mycket sjalvsaker, men felaktig, atta.
+    """
+    from segments import segment_values
+
+    normalized, _binary = preprocess(image, roi, cfg.reader)
+    height, width = normalized.shape[:2]
+
+    scores: list[float] = []
+    for cx1, cy1, cx2, cy2 in boxes:
+        x1 = max(0, min(width, int(round(cx1))))
+        y1 = max(0, min(height, int(round(cy1))))
+        x2 = max(0, min(width, int(round(cx2))))
+        y2 = max(0, min(height, int(round(cy2))))
+        cell = normalized[y1:y2, x1:x2]
+        if cell.size == 0:
+            continue
+        scores.extend(2.0 * abs(value - 0.5) for value in segment_values(cell).values())
+
+    if not scores:
+        raise ReaderError("cellerna ligger utanfor bilden")
+    return float(np.mean(scores))
 
 
 def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
