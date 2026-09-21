@@ -13,16 +13,23 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 
 ROOT = Path(__file__).resolve().parent
-CALIBRATION_FILE = ROOT / "calibration.json"
 
 load_dotenv(ROOT / ".env")
 
 
 def _get(key: str, default: str = "") -> str:
     return os.getenv(key, default).strip()
+
+
+# Var filerna som hor till installationen bor: kalibreringen, lasprofilen och
+# bilderna fran varje korning. Satts till /data nar programmet kor som tillagg i
+# Home Assistant, sa att de overlever en uppdatering av tillagget.
+DATA_DIR = Path(_get("DATA_DIR") or ROOT)
+CAPTURES_DIR = Path(_get("CAPTURES_DIR") or DATA_DIR / "captures")
+CALIBRATION_FILE = Path(_get("CALIBRATION_FILE") or DATA_DIR / "calibration.json")
 
 
 def _get_float(key: str, default: float) -> float:
@@ -50,6 +57,23 @@ def _get_bool(key: str, default: bool) -> bool:
     if not raw:
         return default
     return raw in {"1", "true", "yes", "ja", "on"}
+
+
+# Den lilla HTTP-tjansten som sager vad senaste lasningen gav. Ingen grafik -
+# bara JSON, sa att Home Assistant (och du sjalv med curl) kan se vardet utan att
+# ga via en MQTT-broker. 0 = tjansten ar av.
+STATUS_PORT = _get_int("STATUS_PORT", 0)
+STATUS_BIND = _get("STATUS_BIND") or "0.0.0.0"
+# Live-vyn i granssnittet: ska sidan uppdatera sig sjalv, eller bara nar man ber
+# om det? Gar att stanga av bade i granssnittet och har.
+STATUS_LIVE = _get_bool("STATUS_LIVE", True)
+# Far man starta en lasning respektive starta om tjansten fran granssnittet?
+STATUS_ALLOW_RUN = _get_bool("STATUS_ALLOW_RUN", True)
+STATUS_ALLOW_RESTART = _get_bool("STATUS_ALLOW_RESTART", True)
+# Senaste lasningen, sa att svaret finns kvar aven efter en omstart.
+LATEST_FILE = Path(_get("LATEST_FILE") or DATA_DIR / "latest.json")
+# Loggfilen som granssnittet visar de sista raderna ur.
+LOG_FILE = Path(_get("LOG_FILE") or DATA_DIR / "vatten_kamera.log")
 
 
 @dataclass(frozen=True)
@@ -111,14 +135,27 @@ class MqttConfig:
 class RunConfig:
     """Nar och hur lange vi laser displayen."""
 
+    # Hur lasningen startas:
+    #   natt      - en gang per dygn, strax innan RUN_AT
+    #   intervall - direkt vid start och sedan var EVERY_MINUTES minut
+    #   manuell   - bara nar du sjalv trycker "Las nu" (granssnittet eller
+    #               knappen i Home Assistant)
+    mode: str = "natt"
+    # Hur ofta vi laser i lage 'intervall'.
+    every_minutes: float = 10.0
     # Klockslaget da vardet dyker upp (lokal tid).
     run_at: str = "02:00:00"
-    # Hur lange innan vi startar (lamppavarmning, kamerans exponering).
-    pre_start_s: float = 8.0
-    # Hur lange efter run_at vi fortsatter lasa.
-    window_s: float = 25.0
-    # Tid mellan bilderna.
-    interval_s: float = 1.0
+    # Hur lange innan vi startar. Marginalen ar till for att korningen ska hinna
+    # borja titta pa displayen innan den visar spolttiden (02:00). Vi vet anda
+    # inte exakt nar - pumpens klocka gar efter - sa vi tittar tills vi ser den.
+    pre_start_s: float = 300.0
+    # Hur lange vi tittar som mest innan vi ger upp (RUN_AT + WINDOW_S).
+    window_s: float = 900.0
+    # Sluta titta sa snart displayen visat spolttiden och vardesidan efter den.
+    stop_when_ready: bool = True
+    # Tid mellan bilderna. Tva sekunder ar for glest: vardesidan star stilla i
+    # 10-12 s, och da hinner det bara bli nagra bilder att bygga en rost pa.
+    interval_s: float = 1.5
     # Vanta sa har lange efter att lampan tands innan forsta bilden.
     lamp_warmup_s: float = 2.0
     # Vanta sa har lange efter sista bilden innan lampan slacks.
@@ -128,6 +165,13 @@ class RunConfig:
     # Kameran lanas till lasprofilen (camera_profile.json) strax innan lasningen
     # och laggs tillbaka direkt efter, sa att den inte lamnas i ett morkt lage.
     use_camera_profile: bool = True
+    # Var vardet publiceras. HA kan ligga pa en annan maskin an den har, och da
+    # behovs ingen MQTT-broker alls: vardet kan ga rakt in i HA:s eget API.
+    #   auto  - MQTT om brokern svarar, annars HA:s API
+    #   mqtt  - bara MQTT
+    #   rest  - bara HA:s API (kraver HA_BASE_URL och HA_TOKEN)
+    #   bada  - till bada
+    publish_to: str = "auto"
     # Spara bara bilder dar ett varde kunde lasas.
     save_only_success: bool = False
     # Antal bilder som maste vara eniga for att vardet ska publiceras.
@@ -221,14 +265,18 @@ def load_config() -> Config:
     )
 
     run = RunConfig(
+        mode=_read_mode(_get("MODE", "natt")),
+        every_minutes=_get_float("EVERY_MINUTES", 10.0),
         run_at=_get("RUN_AT", "02:00:00"),
-        pre_start_s=_get_float("PRE_START_S", 8.0),
-        window_s=_get_float("WINDOW_S", 25.0),
-        interval_s=_get_float("INTERVAL_S", 1.0),
+        pre_start_s=_get_float("PRE_START_S", 300.0),
+        window_s=_get_float("WINDOW_S", 900.0),
+        stop_when_ready=_get_bool("STOP_WHEN_READY", True),
+        interval_s=_get_float("INTERVAL_S", 1.5),
         lamp_warmup_s=_get_float("LAMP_WARMUP_S", 2.0),
         lamp_cooldown_s=_get_float("LAMP_COOLDOWN_S", 1.0),
         save_frames=_get_bool("SAVE_FRAMES", True),
         use_camera_profile=_get_bool("USE_CAMERA_PROFILE", True),
+        publish_to=_publish_target(_get("PUBLISH_TO", "auto")),
         save_only_success=_get_bool("SAVE_ONLY_SUCCESS", False),
         min_agreement=_get_int("MIN_AGREEMENT", 3),
         min_confidence=_get_float("MIN_CONFIDENCE", 0.75),
@@ -254,6 +302,21 @@ def load_config() -> Config:
 
     return Config(camera=camera, ha=ha, mqtt=mqtt, run=run, reader=reader,
                   calibration_roi=_parse_roi(_get("CALIBRATION_ROI")))
+
+
+def _publish_target(raw: str) -> str:
+    """Laser PUBLISH_TO ur .env. Ett okant varde blir 'auto'.
+
+    'auto' ar standard: MQTT om brokern svarar, annars Home Assistants eget API.
+    """
+    value = (raw or "auto").strip().lower()
+    return value if value in {"auto", "mqtt", "rest", "bada"} else "auto"
+
+
+def _read_mode(raw: str) -> str:
+    """Laser MODE ur .env. Ett okant varde blir 'natt'."""
+    value = (raw or "natt").strip().lower()
+    return value if value in {"natt", "intervall", "manuell"} else "natt"
 
 
 def _parse_roi(raw: str) -> tuple[int, int, int, int] | None:

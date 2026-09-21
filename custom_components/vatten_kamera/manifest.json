@@ -1,0 +1,12 @@
+{
+  "domain": "vatten_kamera",
+  "name": "Vattenkamera",
+  "codeowners": ["@nikeng-forenade"],
+  "config_flow": true,
+  "documentation": "https://github.com/nikeng-forenade/vatten_kamera",
+  "issue_tracker": "https://github.com/nikeng-forenade/vatten_kamera/issues",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "version": "0.10.0"
+}

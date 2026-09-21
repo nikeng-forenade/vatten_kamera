@@ -457,6 +457,18 @@
 				"--verbose"
 			],
 			"group": "build"
+		},
+		{
+			"label": "Mät vad en körning kostar i CPU",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\bench_reading.py",
+				"captures\\series\\s3",
+				"--frames",
+				"120"
+			],
+			"group": "build"
 		}
 	]
 }

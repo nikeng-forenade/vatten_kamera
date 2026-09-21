@@ -26,7 +26,15 @@ import cv2
 import numpy as np
 
 from camera import CameraError, HikvisionCamera
-from config import ROOT, VERSION, Config, load_config
+from config import (
+    CAPTURES_DIR,
+    ROOT,
+    STATUS_BIND,
+    STATUS_PORT,
+    VERSION,
+    Config,
+    load_config,
+)
 from display_reader import (
     Calibration,
     ReaderError,
@@ -40,14 +48,14 @@ from ha_client import HaError, HomeAssistant
 
 log = logging.getLogger("main")
 
-DEBUG_DIR = ROOT / "captures"
+DEBUG_DIR = CAPTURES_DIR
 
 
 def setup_logging(verbose: bool) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-    )
+    """Loggning till bade terminalen och en fil (se applog.py)."""
+    from applog import setup_logging as _setup
+
+    _setup(verbose)
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +289,11 @@ def cmd_read(cfg: Config, args: argparse.Namespace) -> int:
 
     runner = NightlyRunner(cfg, use_lamp=args.lampa)
     try:
-        summary = runner.run_once(duration_s=args.seconds, save=args.spara)
+        summary = runner.run_once(
+            duration_s=args.seconds,
+            save=args.spara,
+            stop_when_ready=not args.hela_fonstret,
+        )
     except FileNotFoundError:
         print("FEL: ingen kalibrering finns. Kor 'main.py calibrate --frames 16 --save' forst.")
         return 1
@@ -788,13 +800,43 @@ def cmd_daemon(cfg: Config, args: argparse.Namespace) -> int:
     from pipeline import NightlyRunner
 
     runner = NightlyRunner(cfg, use_lamp=not args.utan_lampa)
-    target = runner.next_run_time()
-    print(f"nasta korning: {target:%Y-%m-%d %H:%M:%S} (startar {cfg.run.pre_start_s:.0f} s innan)")
+    mode = cfg.run.mode
+    if mode == "natt":
+        target = runner.next_run_time()
+        print(
+            f"lage: natt - nasta korning: {target:%Y-%m-%d %H:%M:%S}"
+            f" (startar {cfg.run.pre_start_s:.0f} s innan)"
+        )
+    elif mode == "intervall":
+        print(f"lage: intervall - laser nu och sedan var {cfg.run.every_minutes:.0f} minut")
+    else:
+        print("lage: manuell - ingen lasning startas automatiskt")
+    print(f"granssnittet: http://0.0.0.0:{STATUS_PORT}/")
     print("avbryt med Ctrl+C")
     try:
         runner.run_forever()
     except KeyboardInterrupt:
         print("\navslutar")
+    return 0
+
+
+def cmd_status(cfg: Config, args: argparse.Namespace) -> int:
+    """Startar bara webbgranssnittet - bra for att se laget utan att kora."""
+    from status_server import StatusServer
+
+    server = StatusServer(port=STATUS_PORT, bind=STATUS_BIND)
+    if not server.start():
+        print(f"kunde inte oppna port {STATUS_PORT} - ar tjansten redan igang?")
+        return 1
+    print(f"granssnittet lyssnar pa http://{STATUS_BIND}:{STATUS_PORT}/")
+    print("avbryt med Ctrl+C")
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("\navslutar")
+    finally:
+        server.stop()
     return 0
 
 
@@ -824,6 +866,11 @@ def build_parser() -> argparse.ArgumentParser:
     read.add_argument("--seconds", type=float, default=15.0, help="hur lange vi laser")
     read.add_argument("--lampa", action="store_true", help="tand lampan under lasningen")
     read.add_argument("--spara", action="store_true", help="spara bilderna")
+    read.add_argument(
+        "--hela-fonstret",
+        action="store_true",
+        help="las hela tiden ut, aven efter att vardesidan synts",
+    )
     read.set_defaults(func=cmd_read)
 
     watch = sub.add_parser("watch", help="folj displayen live i terminalen")
@@ -869,12 +916,14 @@ def build_parser() -> argparse.ArgumentParser:
     image.set_defaults(func=cmd_image)
 
     run = sub.add_parser("run", help="en komplett korning direkt")
+
+    sub.add_parser("status", help="starta bara webbgranssnittet").set_defaults(func=cmd_status)
     run.add_argument("--seconds", type=float, help="langd pa lasfonstret")
     run.add_argument("--utan-lampa", action="store_true")
     run.add_argument("--utan-sparning", action="store_true")
     run.set_defaults(func=cmd_run)
 
-    daemon = sub.add_parser("daemon", help="vanta in klockslaget och kor varje natt")
+    daemon = sub.add_parser("daemon", help="hall tjansten igang enligt MODE (natt/intervall/manuellt)")
     daemon.add_argument("--utan-lampa", action="store_true")
     daemon.set_defaults(func=cmd_daemon)
 

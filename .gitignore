@@ -18,6 +18,11 @@ debug_frames/
 *.png
 !docs/**/*.png
 
+# Senaste lasningen och loggen - skrivs av tjansten, inte kod.
+latest.json
+latest.json.tmp
+*.log
+
 # Pythonskrräp
 __pycache__/
 *.py[cod]

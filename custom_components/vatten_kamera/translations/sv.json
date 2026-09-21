@@ -1,0 +1,61 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Vattenkamera",
+        "description": "Adressen till tjansten som laser pumpdisplayen (Vattenkamera-tjansten, normalt en LXC i Proxmox). Porten ar STATUS_PORT i tjanstens installningar.",
+        "data": {
+          "host": "Adress",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "ingen_kontakt": "Kunde inte na tjansten pa den adressen. Kontrollera IP, port och att tjansten kor.",
+      "fel_svar": "Tjansten svarade, men det var inte Vattenkamera."
+    },
+    "abort": {
+      "already_configured": "Den adressen ar redan tillagd."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Vattenkamera",
+        "data": {
+          "scan_interval": "Hur ofta vardet hamtas (sekunder)",
+          "allow_run": "Tillat knappen \"Las nu\""
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "niva": {
+        "name": "Niva"
+      },
+      "senast_last": {
+        "name": "Senast last"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "ok": "Last",
+          "laser_nu": "Laser nu",
+          "ingen_lasning": "Ingen lasning",
+          "okontaktbar": "Okontaktbar"
+        }
+      }
+    },
+    "binary_sensor": {
+      "lasning_ok": {
+        "name": "Lasningen gick bra"
+      }
+    },
+    "button": {
+      "las_nu": {
+        "name": "Las nu"
+      }
+    }
+  }
+}

@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vattenkamera</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0f1117; --panel: #171a23; --panel2: #1e222d; --line: #2a2f3d;
+    --text: #e6e8ef; --dim: #8b90a3; --green: #22c55e; --red: #ef4444;
+    --amber: #f59e0b; --blue: #3b82f6;
+  }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: var(--bg); color: var(--text); padding: 20px; line-height: 1.45; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  header h1 { font-size: 1.35rem; font-weight: 600; }
+  header .dim { color: var(--dim); font-size: .85rem; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dim); }
+  .dot.on { background: var(--green); box-shadow: 0 0 0 0 rgba(34,197,94,.7); animation: pulse 2s infinite; }
+  .dot.off { background: var(--red); }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 10px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
+  main { max-width: 1100px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .value-card { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .value { font-size: 3.6rem; font-weight: 700; letter-spacing: -2px; line-height: 1; }
+  .value span { font-size: 1.2rem; font-weight: 400; color: var(--dim); margin-left: 6px; }
+  .value.stale { color: var(--dim); }
+  .meta { color: var(--dim); font-size: .85rem; }
+  .meta b { color: var(--text); font-weight: 500; }
+  #bild { max-height: 170px; border-radius: 8px; border: 1px solid var(--line); margin-left: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 16px; }
+  .card h3 { font-size: .95rem; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .card .state { font-size: .82rem; color: var(--dim); min-height: 2.6em; }
+  .card .state.ok { color: var(--green); }
+  .card .state.fel { color: var(--red); }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+           padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: .85rem; }
+  button:hover { border-color: #3d4457; background: #232838; }
+  button.primary { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 500; }
+  button.primary:hover { background: #2f6fe0; }
+  button:disabled { opacity: .5; cursor: default; }
+  .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
+  #msg { font-size: .85rem; color: var(--dim); }
+  #msg.ok { color: var(--green); } #msg.fel { color: var(--red); }
+  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+                  padding: 18px; margin-bottom: 16px; }
+  section.panel h2 { font-size: 1rem; margin-bottom: 14px; }
+  .group { margin-bottom: 18px; }
+  .group h4 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em;
+              color: var(--dim); margin-bottom: 10px; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .field label { display: block; font-size: .82rem; margin-bottom: 4px; }
+  .field input, .field select { width: 100%; background: var(--panel2); border: 1px solid var(--line);
+       color: var(--text); padding: 7px 9px; border-radius: 7px; font-size: .86rem; font-family: inherit; }
+  .field input:focus, .field select:focus { outline: none; border-color: var(--blue); }
+  .field input.bad { border-color: var(--red); }
+  .field .help { font-size: .74rem; color: var(--dim); margin-top: 3px; }
+  .field .fel { font-size: .74rem; color: var(--red); margin-top: 3px; }
+  .check { display: flex; align-items: center; gap: 8px; padding-top: 20px; }
+  .check input { width: auto; }
+  pre#log { background: #0b0d12; border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+            font-size: .74rem; color: #a7aec2; max-height: 320px; overflow: auto;
+            white-space: pre-wrap; font-family: ui-monospace, Consolas, monospace; }
+  .hint { font-size: .78rem; color: var(--dim); margin-top: 8px; }
+  .live-toggle { display: flex; align-items: center; gap: 6px; font-size: .82rem; color: var(--dim);
+                 margin-left: auto; cursor: pointer; user-select: none; }
+  .live-toggle input { accent-color: var(--green); }
+  .live-toggle input:disabled + span { opacity: .5; }
+  code { background: var(--panel2); padding: 2px 6px; border-radius: 5px; font-size: .8rem; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>💧 Vattenkamera</h1>
+    <span class="dot" id="pulse"></span>
+    <span class="dim" id="live">ansluter…</span>
+    <span class="dim" id="ver"></span>
+    <label class="live-toggle" title="Uppdatera sidan automatiskt">
+      <input type="checkbox" id="liveToggle" checked> Live
+    </label>
+    <button id="refresh">Uppdatera</button>
+  </header>
+
+  <div class="card value-card">
+    <div>
+      <div class="value" id="value">–</div>
+      <div class="meta" id="valueMeta">ingen läsning än</div>
+    </div>
+    <img id="bild" hidden alt="Bilden avläsaren valde">
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>📷 Kameran</h3>
+      <div class="state" id="state-camera">inte testad</div>
+      <button data-test="camera">Testa kameran</button>
+    </div>
+    <div class="card">
+      <h3>🏠 Home Assistant</h3>
+      <div class="state" id="state-ha">inte testad</div>
+      <button data-test="ha">Testa Home Assistant</button>
+    </div>
+    <div class="card">
+      <h3>📡 MQTT</h3>
+      <div class="state" id="state-mqtt">inte testad</div>
+      <button data-test="mqtt">Testa MQTT</button>
+    </div>
+    <div class="card">
+      <h3>⏱️ Tjänsten</h3>
+      <div class="state" id="state-service">…</div>
+      <p class="hint" id="modeText" style="margin-top:8px"></p>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="run">Läs nu</button>
+    <button id="restart">Starta om tjänsten</button>
+    <span id="msg"></span>
+  </div>
+  <section class="panel">
+    <h2>Inställningar</h2>
+    <form id="form"></form>
+    <div class="actions" style="margin:16px 0 0">
+      <button class="primary" id="save">Spara</button>
+      <span class="hint">Sparas i <code>.env</code> — samma fil som kommandoraden använder.</span>
+    </div>
+    <div id="saveMsg" class="hint"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Logg</h2>
+    <pre id="log">hämtar…</pre>
+  </section>
+
+  <p class="hint" id="integrationHint"></p>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function api(path, body) {
+  const options = body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {};
+  const response = await fetch(path, options);
+  let data = {};
+  try { data = await response.json(); } catch (e) { data = { ok: false, text: 'ogiltigt svar' }; }
+  return { status: response.status, ...data };
+}
+
+function ago(seconds) {
+  if (seconds === null || seconds === undefined) return 'okänt';
+  if (seconds < 90) return `${seconds} s`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
+  return `${(seconds / 3600).toFixed(1)} h`;
+}
+
+function countdown(iso) {
+  if (!iso) return 'okänt';
+  const diff = (new Date(iso) - new Date()) / 1000;
+  if (diff <= 0) return 'strax';
+  const h = Math.floor(diff / 3600), m = Math.round((diff % 3600) / 60);
+  return h > 0 ? `${h} h ${m} min` : `${m} min`;
+}
+
+function klockaAv(iso) {
+  return new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+}
+
+async function refreshStatus() {
+  const health = await api('/api/health');
+  const latest = await api('/api/latest');
+
+  $('pulse').className = 'dot ' + (health.ok && !health.kor ? 'on' : health.ok ? 'on' : 'off');
+  $('ver').textContent = `v${health.version || '?'} · ${health.host || ''}`;
+  $('live').textContent = health.kor
+    ? `läser just nu (startade ${health.startad || ''})`
+    : `tjänsten uppe i ${Math.floor((health.uppe_s || 0) / 60)} min`;
+
+  const lage = health.lage || 'natt';
+  const service = [];
+  if (lage === 'manuell') {
+    service.push('läser bara när du trycker "Läs nu"');
+    if (health.kor) service.push(`läser just nu (startade ${health.startad || ''})`);
+  } else if (lage === 'intervall') {
+    if (health.nasta_korning) {
+      service.push(`nästa körning: ${klockaAv(health.nasta_korning)} (om ${countdown(health.nasta_korning)})`);
+    } else {
+      service.push('nästa körning: strax efter start');
+    }
+    service.push(`värdet läses var ${health.var_minuter} minut`);
+  } else {
+    if (health.nasta_korning) {
+      service.push(`nästa körning: ${klockaAv(health.nasta_korning)} (om ${countdown(health.nasta_korning)})`);
+    } else {
+      service.push('nästa körning: okänd');
+    }
+    service.push('då visar displayen strax 02:00 — värdet läses efter den sidan');
+  }
+  if (latest.ok) service.push(`senaste värdet: ${latest.display} (${ago(health.aldsta_lasning_s)} sedan)`);
+  else service.push(`senaste läsningen: ${latest.error || 'misslyckades'}`);
+  $('state-service').textContent = service.join(' · ');
+
+  $('modeText').innerHTML = {
+    natt: 'Läget <b>natt</b>: en körning per dygn. Den startar strax innan klockslaget i '
+      + 'inställningarna och läser tills displayen visat <b>02:00</b> och värdet efter den '
+      + 'sidan är fångat — sedan slutar den. Klockslaget är datorns tid, alltså pumpens '
+      + '02:00 (pumpens klocka går efter).',
+    intervall: 'Läget <b>intervall</b>: den läser direkt när tjänsten startar och sedan var '
+      + 'X minut (ställs in under <i>Tider</i>). Värdet står stilla tills spolningen ändrar '
+      + 'det, så en läsning i timmen räcker för att se när det händer.',
+    manuell: 'Läget <b>manuell</b>: den läser <b>aldrig</b> av sig själv. Du startar en '
+      + 'läsning med <b>Läs nu</b> här, eller med knappen i Home Assistant.',
+  }[lage] || '';
+
+  if (latest.ok && latest.numeric !== null) {
+    $('value').innerHTML = `${latest.display || latest.numeric}<span>${latest.unit || ''}</span>`;
+    $('value').className = 'value';
+    $('valueMeta').innerHTML =
+      `konfidens <b>${latest.confidence}</b> · <b>${latest.votes}</b> av ${latest.frames} bilder · ` +
+      `läst <b>${(latest.read_at || '').replace('T', ' ')}</b>` +
+      (latest.published_to ? ` · publicerad via <b>${latest.published_to}</b>` : '');
+  } else {
+    $('value').textContent = '–';
+    $('value').className = 'value stale';
+    $('valueMeta').textContent = latest.error || 'ingen läsning än';
+  }
+
+  if (latest.bild_url) {
+    $('bild').src = latest.bild_url;
+    $('bild').hidden = false;
+  } else {
+    $('bild').hidden = true;
+  }
+
+  $('run').disabled = !!health.kor || health.far_lasa === false;
+  $('restart').disabled = health.far_starta_om === false;
+
+  $('integrationHint').innerHTML =
+    `Adress till Home Assistant-integrationen (HACS): <code>${health.adress || ''}</code>`;
+
+  if (health.live === false && live) {
+    // Avstangt i installningarna - da ska sidan inte uppdatera sig sjalv.
+    live = false;
+    $('liveToggle').checked = false;
+  }
+  $('liveToggle').disabled = health.live === false;
+  $('liveToggle').title = health.live === false
+    ? 'Live-laget ar avstangt i installningarna (STATUS_LIVE)'
+    : 'Uppdatera sidan automatiskt';
+  return health;
+}
+
+async function refreshLog() {
+  const data = await api('/api/log?lines=120');
+  $('log').textContent = (data.lines || []).join('\n') || 'tomt';
+}
+
+async function runTest(what, button) {
+  const target = $('state-' + what);
+  target.textContent = 'testar…';
+  target.className = 'state';
+  button.disabled = true;
+  const data = await api('/api/test/' + what);
+  target.textContent = data.text || (data.ok ? 'ok' : 'misslyckades');
+  target.className = 'state ' + (data.ok ? 'ok' : 'fel');
+  if (data.bild) {
+    const img = new Image();
+    img.src = data.bild;
+    img.style.cssText = 'max-width:100%;border-radius:8px;margin-top:8px;border:1px solid #2a2f3d';
+    target.after(img);
+  }
+  button.disabled = false;
+}
+
+function fieldInput(field) {
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+  const inputId = 'f_' + field.key;
+
+  if (field.kind === 'bool') {
+    wrap.innerHTML = `<div class="check"><input type="checkbox" id="${inputId}"><label for="${inputId}">${field.label}</label></div>`;
+    wrap.querySelector('input').checked = String(field.value).toLowerCase() === 'true';
+    if (field.help) wrap.insertAdjacentHTML('beforeend', `<div class="help">${field.help}</div>`);
+    return wrap;
+  }
+
+  let input;
+  if (field.kind === 'choice') {
+    input = document.createElement('select');
+    (field.choices || []).forEach((choice) => {
+      const option = document.createElement('option');
+      option.value = choice; option.textContent = choice;
+      input.appendChild(option);
+    });
+    input.value = field.value || (field.choices || [''])[0];
+  } else {
+    input = document.createElement('input');
+    input.type = field.kind === 'secret' ? 'password' : (field.kind === 'int' || field.kind === 'float' ? 'number' : 'text');
+    if (field.kind === 'float') input.step = 'any';
+    if (field.min !== null && field.min !== undefined) input.min = field.min;
+    if (field.max !== null && field.max !== undefined) input.max = field.max;
+    input.value = field.value || '';
+    if (field.kind === 'secret') input.placeholder = field.har_varde ? '•••••• (sparat)' : 'inget sparat';
+    if (field.kind === 'time') input.placeholder = 'HH:MM:SS';
+  }
+  input.id = inputId;
+  input.dataset.key = field.key;
+
+  const label = document.createElement('label');
+  label.textContent = field.label;
+  label.htmlFor = inputId;
+  wrap.append(label, input);
+  if (field.help) wrap.insertAdjacentHTML('beforeend', `<div class="help">${field.help}</div>`);
+  return wrap;
+}
+
+let fields = [];
+let live = true;
+const LIVE_KEY = 'vattenkamera_live';
+
+async function loadConfig() {
+  const data = await api('/api/config');
+  fields = data.fields || [];
+  const form = $('form');
+  form.innerHTML = '';
+
+  const groups = [];
+  fields.forEach((field) => {
+    if (!groups.includes(field.group)) groups.push(field.group);
+  });
+
+  groups.forEach((group) => {
+    const box = document.createElement('div');
+    box.className = 'group';
+    box.innerHTML = `<h4>${group}</h4>`;
+    const grid = document.createElement('div');
+    grid.className = 'fields';
+    fields.filter((field) => field.group === group).forEach((field) => grid.appendChild(fieldInput(field)));
+    box.appendChild(grid);
+    form.appendChild(box);
+  });
+
+  form.addEventListener('input', (event) => {
+    const key = event.target.dataset.key;
+    const error = form.querySelector(`#fel_${key}`);
+    if (error) error.remove();
+    event.target.classList.remove('bad');
+  });
+}
+
+function collect() {
+  // Bara det som faktiskt andrats skickas. Annars skulle ett falt som saknas i
+  // .env (och darfor visas med sitt standardvarde) skrivas ner som om nagon
+  // hade valt det - och da kunde en installning stangas av av misstag.
+  const payload = {};
+  fields.forEach((field) => {
+    const input = $('f_' + field.key);
+    if (!input) return;
+    const nu = field.kind === 'bool' ? (input.checked ? 'true' : 'false') : input.value;
+    const innan = field.kind === 'bool'
+      ? (String(field.value).toLowerCase() === 'true' ? 'true' : 'false')
+      : String(field.value || '');
+    if (field.kind === 'secret') {
+      if (input.value) payload[field.key] = input.value;
+      return;
+    }
+    if (nu !== innan) payload[field.key] = nu;
+  });
+  return payload;
+}
+
+async function save() {
+  const form = $('form');
+  form.querySelectorAll('.fel').forEach((node) => node.remove());
+  const result = await api('/api/config', collect());
+
+  if (result.status >= 400 && result.fel) {
+    Object.entries(result.fel).forEach(([key, text]) => {
+      const input = $('f_' + key);
+      if (input) {
+        input.classList.add('bad');
+        input.insertAdjacentHTML('afterend', `<div class="fel" id="fel_${key}">${text}</div>`);
+      }
+    });
+    $('saveMsg').textContent = 'inget sparades — rätta det som är rött';
+    $('saveMsg').className = 'hint fel';
+    return;
+  }
+
+  $('saveMsg').textContent = result.text || 'sparat';
+  $('saveMsg').className = 'hint ok';
+  if ((result.andrade || []).length) {
+    const restart = await api('/api/restart', {});
+    $('saveMsg').textContent += restart.text ? ` — ${restart.text}` : '';
+  }
+  await loadConfig();
+}
+
+$('run').addEventListener('click', async () => {
+  const data = await api('/api/run', {});
+  $('msg').textContent = data.text || '';
+  $('msg').className = data.ok ? 'ok' : 'fel';
+  setTimeout(refreshStatus, 1500);
+});
+
+$('restart').addEventListener('click', async () => {
+  const data = await api('/api/restart', {});
+  $('msg').textContent = data.text || '';
+  $('msg').className = data.ok ? 'ok' : 'fel';
+});
+
+$('save').addEventListener('click', save);
+
+document.querySelectorAll('button[data-test]').forEach((button) => {
+  button.addEventListener('click', () => runTest(button.dataset.test, button));
+});
+
+$('liveToggle').addEventListener('change', (event) => {
+  live = event.target.checked;
+  localStorage.setItem(LIVE_KEY, live ? '1' : '0');
+  if (live) {
+    refreshStatus();
+    refreshLog();
+  } else {
+    $('live').textContent = 'live av';
+  }
+});
+
+$('refresh').addEventListener('click', () => {
+  refreshStatus();
+  refreshLog();
+});
+
+(async function start() {
+  live = localStorage.getItem(LIVE_KEY) !== '0';
+  $('liveToggle').checked = live;
+  await loadConfig();
+  await refreshStatus();
+  await refreshLog();
+  setInterval(() => { if (live) refreshStatus(); }, 5000);
+  setInterval(() => { if (live) refreshLog(); }, 20000);
+})();
+</script>
+</body>
+</html>

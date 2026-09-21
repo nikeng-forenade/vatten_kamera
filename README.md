@@ -3,22 +3,22 @@
 Läser av pumpdisplayen i källaren efter kl. 02:00 och skickar värdet till Home Assistant.
 
 Displayen visar **liter kvar innan spolning** som ett tal med två decimaler, t.ex. `1.22`
-eller `0.50`. Värdet syns bara i **10–12 sekunder** strax efter 02:00. Därför räcker det
-inte att ta en bild: programmet tänder lampan i tid, tar en bild i sekunden genom hela
-fönstret och låter en majoritetsröstning avgöra värdet.
+och `0.50`. Värdet syns bara i **10–12 sekunder** strax efter 02:00. Programmet tittar
+därför på displayen tills den visat spolttiden **02:00** och tar värdet från sidan som
+kommer direkt efter den — sedan slutar det.
 
 ```mermaid
 flowchart LR
-    A[01:59:52<br/>vaknar] --> B[Tänder lampan]
-    B --> C[Väntar på att<br/>kameran ställer in sig]
-    C --> D[En bild i sekunden<br/>i 25 s]
-    D --> E[Tolkar siffrorna<br/>i varje bild]
-    E --> F{Eniga<br/>tillräckligt många?}
-    F -->|ja| G[Publicerar värdet<br/>till MQTT]
-    F -->|nej| H[Rapporterar<br/>misslyckad läsning]
-    G --> I[Släcker lampan]
-    H --> I
-    I --> J[Sparar bilderna<br/>som bevis]
+    A[Börjar titta<br/>före klockslaget] --> B[Tänder lampan]
+    B --> C[Bild var 1,5:e sekund]
+    C --> D{Tidssidan<br/>02:00?}
+    D -->|nej| C
+    D -->|ja| E[Värdet är sidan<br/>efter 02:00]
+    E --> F{Värdet sett<br/>några bilder i rad?}
+    F -->|nej| C
+    F -->|ja| G[Slutar titta<br/>och röstar]
+    G --> H[Publicerar värdet]
+    H --> I[Släcker lampan]
 ```
 
 ## Så här fungerar avläsningen
@@ -144,7 +144,8 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `main.py diagnose` | Säger till om kameran står nära nog |
 | `main.py mqtt-test --value 1050` | Publicerar ett provvärde så sensorerna dyker upp i HA |
 | `main.py run` | En komplett körning direkt (lampa, läsning, publicering) |
-| `main.py daemon` | Väntar in klockslaget och kör varje natt |
+| `main.py daemon` | Håller tjänsten igång enligt `MODE` (natt, intervall eller manuellt) |
+| `main.py status` | Startar bara webbgränssnittet på `STATUS_PORT` |
 
 ## Inställningar i `.env`
 
@@ -159,17 +160,43 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `COLOR_CHANNEL` | `auto` | `b` för röd LED: siffrorna lyser men den röda glöden blir svart |
 | `THRESHOLD` | `0` | Fast tröskel 0–255. Hög tröskel håller spegelbilden i glaset borta |
 | `UNIT` | tom | Enhet vid sensorn i HA, t.ex. `m3` eller `l` |
-| `RUN_AT` | `02:00:00` | Klockslaget värdet visas |
-| `WINDOW_S` | `25` | Hur länge vi läser |
-| `INTERVAL_S` | `1.0` | Tid mellan bilderna |
-| `PRE_START_S` | `8` | Hur långt innan körningen startar |
+| `MODE` | `natt` | När den läser: `natt`, `intervall` eller `manuell` — se nedan |
+| `EVERY_MINUTES` | `10` | Hur ofta i läget `intervall` |
+| `RUN_AT` | `02:00:00` | Klockslaget värdet visas (pumpens klocka — se nedan) |
+| `WINDOW_S` | `1800` | Ge inte upp efter så här många sekunder |
+| `INTERVAL_S` | `1.5` | Tid mellan bilderna |
+| `PRE_START_S` | `600` | Hur långt innan klockslaget den börjar titta |
+| `STOP_WHEN_READY` | `true` | Sluta så snart värdet är fångat |
 | `MIN_AGREEMENT` | `3` | Antal bilder som måste vara eniga |
 | `MIN_CONFIDENCE` | `0.75` | Minsta konfidens per siffra |
+| `PUBLISH_TO` | `auto` | `auto`, `mqtt`, `rest`, `bada` eller `av` |
 | `HA_BASE_URL`, `HA_TOKEN` | – | Home Assistant |
 | `HA_LIGHT_ENTITY` | tom | Lampan vid pumpen. **Tom = ingen lampstyrning** |
 | `MQTT_HOST`, `MQTT_PORT` | – | MQTT-broker |
 | `CLIP_BOTTOM` | `0.0` | Andel av utsnittets höjd som klipps bort nedtill (reflektionen) |
-| `SAVE_FRAMES` | `true` | Sparar bilderna från varje körning |
+| `SAVE_FRAMES` | `true` | Sparar alla bilder från körningen (bilden som lästes sparas alltid) |
+| `STATUS_PORT` | `8099` | Porten för webbgränssnittet |
+| `STATUS_BIND` | `0.0.0.0` | Adressen webbgränssnittet lyssnar på |
+| `STATUS_LIVE` | `true` | `false` = sidan uppdaterar sig bara när du ber om det |
+| `STATUS_ALLOW_RUN` | `true` | Får "Läs nu" användas i gränssnittet och i HA? |
+| `STATUS_ALLOW_RESTART` | `true` | Får tjänsten startas om från gränssnittet? |
+
+## När ska den läsa?
+
+`MODE` styr om tjänsten läser av sig själv eller bara på begäran:
+
+| Läge | Vad som händer |
+|---|---|
+| `natt` | En körning per dygn. Den börjar titta `PRE_START_S` innan `RUN_AT` och slutar så snart värdet är fångat. Standard. |
+| `intervall` | Läser direkt när tjänsten startar och sedan var `EVERY_MINUTES` minut. Värdet står stilla tills spolningen ändrar det, så det räcker med en läsning i timmen för att se när det händer. |
+| `manuell` | Läser **aldrig** av sig själv. En läsning startas med **Läs nu** i webbgränssnittet, med `main.py read`, eller med knappen `button.vatten_kamera_las_nu` i Home Assistant. |
+
+Läget ändras i webbgränssnittet (under **Tider**) eller direkt i `.env`. Tjänsten måste
+startas om efteråt — knappen gör det åt dig.
+
+En körning tar en dryg minut (den väntar in spolttidssidan). Kommer en schemalagd körning
+medan en annan pågår hoppar den över den gången, i stället för att två körningar slåss om
+kameran.
 
 ## Entiteter i Home Assistant
 
@@ -199,6 +226,61 @@ Lampan är inte installerad än. När den är på plats:
 2. Testa med `run.cmd main.py lamp on` och `run.cmd main.py lamp off`.
 
 Är `HA_LIGHT_ENTITY` tom körs allt annat som vanligt, men utan belysning.
+
+## Integrationen i Home Assistant (HACS)
+
+Att köra kameran och tolka displayen är för tungt för att ligga i Home Assistant, och HA
+kan ligga på en helt annan maskin. Därför är det **två delar**:
+
+* **Tjänsten** (den här koden) kör på en maskin med kameran inom räckhåll och gör allt
+  bildarbete. Den har ett litet HTTP-API på port `8099`.
+* **Integrationen** (`custom_components/vatten_kamera/`) är ett tunt skal i Home Assistant
+  som frågar tjänsten om det senaste värdet. Den innehåller **ingen bildbehandling** och
+  behöver inga extra paket — HACS installerar den utan att HA blir tyngre.
+
+```mermaid
+flowchart LR
+    K[Kameran] --> T[Vattenkamera-tjansten<br/>LXC i Proxmox<br/>port 8099]
+    T --> W[Webbgranssnitt<br/>http://ip:8099/]
+    T --> H[HA-integrationen<br/>via HACS]
+    H --> E[sensor.vatten_kamera_niva<br/>sensor.vatten_kamera_senast_last<br/>sensor.vatten_kamera_status<br/>binary_sensor...lasning_ok<br/>button...las_nu]
+```
+
+### Installera
+
+1. I HACS: **Integrations → ⋮ → Custom repositories**, klistra in
+   `https://github.com/nikeng-forenade/vatten_kamera` och välj typen **Integration**.
+2. Sök upp **Vattenkamera** i HACS och installera. Starta om Home Assistant.
+3. **Inställningar → Enheter och tjänster → Lägg till integration → Vattenkamera** och
+   fyll i tjänstens **IP** och **port** (`8099`).
+
+Adressen står i webbgränssnittets nederkant, färdig att kopiera.
+
+### Entiteter
+
+| Entitet | Betydelse |
+|---|---|
+| `sensor.vatten_kamera_niva` | Värdet (`0.58`). Attribut: `siffror`, `visas_som`, `konfidens`, `roster`, `bilder`, `last`, `bild`, `lage`, `nasta_korning` |
+| `sensor.vatten_kamera_senast_last` | När värdet lästes (tidsstämpel) |
+| `sensor.vatten_kamera_status` | `Last` / `Laser nu` / `Ingen lasning` / `Okontaktbar` |
+| `binary_sensor.vatten_kamera_lasning_ok` | Gick senaste läsningen bra? |
+| `button.vatten_kamera_las_nu` | Startar en läsning direkt (även i läget `manuell`) |
+
+Är tjänsten nere blir entiteterna **otillgängliga** i stället för att visa ett gammalt
+värde — ett inaktuellt "liter kvar" är värre än inget. Hur ofta värdet hämtas ställs in
+under integrationens **Konfigurera** (10–3600 s, standard 60 s).
+
+### Publicering
+
+Använder du HACS-integrationen ska tjänsten **inte** publicera något själv: sätt
+`PUBLISH_TO=av`. Annars finns värdet två gånger i HA, från två olika entiteter.
+
+| `PUBLISH_TO` | När det passar |
+|---|---|
+| `av` | Du använder HACS-integrationen (rekommenderas) |
+| `rest` | Tjänsten skickar värdet direkt till HA:s API (`HA_BASE_URL` + `HA_TOKEN`) |
+| `mqtt` | Du har en MQTT-broker |
+| `auto` | MQTT om brokern svarar, annars HA:s API. Standard — men blir fel om ingen av dem finns |
 
 ## Kamerans bildinställningar
 
@@ -468,16 +550,67 @@ cd C:\vatten_kamera
 Vid fel skrivs allt till loggen och — om `NOTIFY_ON_FAILURE=true` — en notis skickas till
 Home Assistant.
 
+### I en LXC i Proxmox
+
+Tjänsten är gjord för att köra i en liten headless Debian-container. Ingen GPU behövs:
+en avläsning kostar ~144 ms CPU (mätt med `tools/bench_reading.py`), alltså några sekunder
+per dygn, och ~60 MB minne.
+
+```bash
+# I containern, som root:
+bash lxc/install.sh --camera-password '...' --mode natt --run-at 02:05:00
+```
+
+| Fil | Vad den gör |
+|---|---|
+| `lxc/proxmox-create.sh` | Skapar containern i Proxmox (`pct create`) |
+| `lxc/install.sh` | Installerar i containern: paket, kod i `/opt/vattenkamera`, `.env`, systemd-tjänsten |
+| `lxc/vatten-kamera.service` | systemd-enheten som håller tjänsten igång |
+| `lxc/update.sh` | Hämtar ny kod och startar om |
+
+Koden ligger i `/opt/vattenkamera`, men data (calibration, senaste värdet, bilder, logg)
+i `/opt/vattenkamera/data` — så en uppdatering av koden rör inte installationen.
+
+### Webbgränssnittet
+
+Öppna `http://<containerns-ip>:8099/` för att se att allt lever:
+
+* Senaste värdet, **bilden avläsaren valde** som bevis, och när det lästes
+* Tjänstens läge: nästa körning, om en läsning pågår
+* Testknappar för kamera, Home Assistant och MQTT
+* **Läs nu** och **Starta om tjänsten**
+* Alla inställningar i `.env` — grupperade, med förklaringar. Bara ändrade fält skrivs
+* Loggen, direkt i sidan
+* Adressen till HA-integrationen, färdig att kopiera
+
+Sidan uppdaterar sig själv så länge **Live** är ikryssat; stäng av krysset (eller sätt
+`STATUS_LIVE=false`) för att bara uppdatera när du trycker **Uppdatera**. `STATUS_ALLOW_RUN`
+och `STATUS_ALLOW_RESTART` stänger av knapparna, om du inte vill att vem som helst på nätet
+ska kunna starta en läsning.
+
 **Tiden som gäller är pumpens egen klocka, inte datorns.** Spolningen startar när
 pumpens klocka slår det klockslag displayen visar (`02:00`), och pumpens klocka går
 efter — mätt 2026-09-20 visade den 15:15 klockan 15:20:25 och 18:32 klockan 18:37:53,
 alltså **~5 minuter efter**. Därför står `RUN_AT=02:05:00` i `.env`. Har du ställt
 pumpens klocka rätt sätter du tillbaka `RUN_AT` till `02:00:00`.
 
-Fönstret är två minuter långt, eftersom värdet man vill ha dyker upp **efter** att
-spolningen startar. Programmet röstar därför bara om de läsningar som kommer efter
-spoltidssidan (`02:00`) — annars kunde en annan värdesida, som displayen visar oftare
-under resten av dygnet, få flest röster.
+Fönstret är generöst tilltaget (tio minuter innan, trettio minuter efter), men
+körningen **slutar så snart värdet är fångat**. Displayen visar sina sidor i samma
+ordning hela tiden:
+
+```
+klockan  ->  spolttiden 02:00  ->  VÄRDET  ->  flödet  ->  klockan ...
+```
+
+Värdet vi vill ha är alltså sidan som kommer **direkt efter** 02:00 — varje varv, hela
+dygnet. Programmet tittar därför på displayen tills den visat `02:00` **och** värdesidan
+efter den synts några bilder i rad, och slutar då. Klockslaget i `RUN_AT` är bara en
+startpunkt, inte ett krav: vi vet att pumpens klocka går efter, och i stället för att gissa
+hur mycket tittar vi tills vi ser 02:00 på displayen.
+
+Varför inte bara läsa värdet när som helst på dygnet? Jo, det går — värdet står ju kvar
+tills nästa spolning. Men genom att läsa i samband med spolningen får du värdet *före*
+spolningen, vilket är det du vill ha in i Home Assistant.
 
 Kontrollera avvikelsen själv: kör `run.cmd main.py watch --minutes 3` och jämför
 klockslaget som visas med vad klockan är.

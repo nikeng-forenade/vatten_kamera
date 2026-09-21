@@ -1,0 +1,26 @@
+[Unit]
+Description=Vattenkamera - laser pumpdisplayen efter 02:00
+Documentation=https://github.com/nikeng-forenade/vatten_kamera
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@APP_DIR@
+ExecStart=@APP_DIR@/.venv/bin/python main.py daemon
+
+# Loggen hamnar bade i journalen och i @APP_DIR@/data/vatten_kamera.log,
+# som granssnittet visar de sista raderna ur.
+Environment=PYTHONUNBUFFERED=1
+Environment=DATA_DIR=@APP_DIR@/data
+
+# Kameran ska komma tillbaka av sig sjalv om natten gick fel.
+Restart=always
+RestartSec=10
+
+# Granssnittet ska kunna starta om tjansten nar en installning andrats, och
+# nattkorningen ska kunna skriva i datakatalogen.
+User=root
+
+[Install]
+WantedBy=multi-user.target

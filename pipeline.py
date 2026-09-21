@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -19,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from camera import CameraError, HikvisionCamera
-from config import ROOT, VERSION, Config, load_config
+from config import CAPTURES_DIR, LATEST_FILE, ROOT, VERSION, Config, load_config
 from display_reader import (
     Calibration,
     Consensus,
@@ -34,10 +36,12 @@ from display_reader import (
 )
 from ha_client import HaError, HomeAssistant
 from mqtt_publisher import MqttPublisher
+from rest_publisher import RestPublisher
+from status_server import set_state
 
 log = logging.getLogger(__name__)
 
-RUNS_DIR = ROOT / "captures" / "runs"
+RUNS_DIR = CAPTURES_DIR / "runs"
 
 
 @dataclass
@@ -53,14 +57,84 @@ class RunSummary:
     confidence: float
     lamp_used: bool
     frames_dir: str | None = None
+    # Bilden som visar det varde vi kom fram till - det granssnittet visar.
+    image: str | None = None
     error: str = ""
     # Vad röstningen gjorde, steg för steg — så att en körning går att granska i
     # efterhand utan att kameran behöver köras om.
     page_note: str = ""
     details: list[dict] = field(default_factory=list)
+    # Vart vardet gick: "mqtt", "rest", "mqtt+rest" eller tomt.
+    published_to: str = ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, ensure_ascii=False)
+
+    def to_status(self, *, unit: str = "", decimals: int = 0) -> dict:
+        """Senaste lasningen som JSON.
+
+        Det ar vad vardestjansten svarar pa /api/latest, och vad Home
+        Assistant-lasen laser. Halls liten och sjalvstaendig, sa att den som
+        bara vill visa vardet slipper kanna till resten av korningen.
+        """
+        return {
+            "version": self.version,
+            "ok": self.value is not None,
+            "value": self.value,
+            "numeric": self.numeric,
+            "display": f"{self.numeric:.{decimals}f}" if self.numeric is not None else None,
+            # Antal decimaler, sa att mottagaren kan visa vardet utan att gissa.
+            "decimals": decimals,
+            "unit": unit,
+            "confidence": round(self.confidence, 3),
+            "votes": self.votes,
+            "frames": self.frames_taken,
+            "read_at": self.finished,
+            # Samma tid med tidszon, sa att Home Assistant kan visa "last senast"
+            # ratt aven om containern och HA star i olika tidszoner.
+            "read_at_iso": _local_iso(self.finished),
+            "bild": self.image,
+            "bilder_i": self.frames_dir,
+            "published_to": self.published_to,
+            "error": self.error,
+        }
+
+
+def _local_iso(text: str) -> str | None:
+    """Gor en lokal tidsstampel ('2026-09-21T18:19:10') till en med tidszon."""
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.astimezone()
+    return moment.isoformat(timespec="seconds")
+
+
+def write_status(
+    summary: RunSummary,
+    *,
+    unit: str = "",
+    decimals: int = 0,
+    path: Path = LATEST_FILE,
+) -> None:
+    """Skriver senaste lasningen till latest.json.
+
+    Skrivs till en temp-fil och byts ut, sa att en lasning som kommer mitt i
+    aldrig ser en halvfardig fil.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(
+            json.dumps(summary.to_status(unit=unit, decimals=decimals), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+    except OSError as exc:
+        log.warning("kunde inte skriva %s: %s", path, exc)
 
 
 class NightlyRunner:
@@ -70,6 +144,7 @@ class NightlyRunner:
         self.camera = HikvisionCamera(cfg.camera)
         self.ha = HomeAssistant(cfg.ha)
         self.mqtt = MqttPublisher(cfg.mqtt)
+        self.rest = RestPublisher(cfg.ha, unit=cfg.mqtt.unit)
         self.calibration = Calibration.load(cfg.calibration_file)
         # Hur olika tva bilder far vara for att anses visa samma varde.
         self.similarity_threshold = cfg.run.group_threshold
@@ -117,6 +192,43 @@ class NightlyRunner:
         except CameraSettingsError as exc:
             log.error("KUNDE INTE ATERSTALLA KAMERAN: %s", exc)
 
+    # --- Publicering -------------------------------------------------------
+
+    def _open_publishers(self) -> tuple[bool, bool]:
+        """Oppnar vagarna till Home Assistant och returnerar (mqtt, rest).
+
+        Home Assistant kan ligga pa en annan maskin an den som laser displayen,
+        och da behovs egentligen ingen MQTT-broker: vardet kan ga rakt in i
+        HA:s eget API med en langlivad token. Vilken vag som anvands styrs av
+        PUBLISH_TO:
+
+            auto  - MQTT om brokern svarar, annars HA:s API
+            mqtt  - bara MQTT
+            rest  - bara HA:s API
+            bada  - till bada
+            av    - inget publiceras (HACS-integrationen laser latest.json)
+        """
+        target = self.cfg.run.publish_to
+        mqtt_up = rest_up = False
+
+        if target in {"auto", "mqtt", "bada"}:
+            mqtt_up = self.mqtt.connect()
+        if target in {"rest", "bada"}:
+            rest_up = self.rest.connect()
+        elif target == "auto" and not mqtt_up:
+            log.info("MQTT svarade inte - skickar vardet direkt till Home Assistant i stallet")
+            rest_up = self.rest.connect()
+
+        if target == "av":
+            log.info("PUBLISH_TO=av - vardet publiceras inte, bara senaste.json skrivs")
+        elif not (mqtt_up or rest_up):
+            log.error(
+                "vardet kunde inte publiceras: varken MQTT (%s) eller Home Assistant (%s) svarar",
+                self.cfg.mqtt.host or "ingen broker",
+                self.cfg.ha.base_url or "ingen adress",
+            )
+        return mqtt_up, rest_up
+
     # --- Tid ---------------------------------------------------------------
 
     def next_run_time(self, now: datetime | None = None) -> datetime:
@@ -151,6 +263,7 @@ class NightlyRunner:
         *,
         duration_s: float,
         frames_dir: Path | None,
+        stop_when_ready: bool = True,
     ) -> tuple[list[Reading], list[tuple[Reading, Path]]]:
         """Tar bilder under `duration_s`, vager samman lika bilder och tolkar dem.
 
@@ -166,6 +279,7 @@ class NightlyRunner:
         jpegs: list[bytes | None] = []
         deadline = time.time() + duration_s
         index = 0
+        ready = ReadyTracker()
 
         while time.time() < deadline:
             frame_started = time.time()
@@ -186,8 +300,26 @@ class NightlyRunner:
                 continue
 
             crops.append(crop)
-            jpegs.append(frame.jpeg if (frames_dir is not None and cfg.save_frames) else None)
+            jpegs.append(frame.jpeg if frames_dir is not None else None)
             log.debug("bild %d tagen", index)
+
+            # Displayen visar vardet strax efter att den visat 02:00. Sa snart vi
+            # sett den sekvensen nagra bilder i rad ar lasningen klar - da slutar
+            # vi titta i stallet for att sta kvar resten av fonstret.
+            if stop_when_ready and ready.feed(
+                read_image(
+                    image_from_crop(crop, self.calibration.roi),
+                    self.calibration,
+                    reader_cfg,
+                )
+            ):
+                log.info(
+                    "displayen visade spolttiden och vardesidan efter den (%r i %d bilder i rad)"
+                    " - lasningen ar klar",
+                    ready.value,
+                    ready.streak,
+                )
+                break
 
             time.sleep(max(0.0, cfg.interval_s - (time.time() - frame_started)))
 
@@ -222,8 +354,15 @@ class NightlyRunner:
             else:
                 log.info("grupp %d (%d bilder): inget varde", group_number, len(indices))
 
-            if frames_dir is not None and cfg.save_frames:
-                if not cfg.save_only_success or reading.ok:
+            if frames_dir is not None:
+                # En bild per grupp som gick att lasa sparas ALLTID: den bilden ar
+                # beviset som granssnittet och Home Assistant visar. Hela serien
+                # (aven grupper utan varde) sparas bara nar SAVE_FRAMES=true.
+                if cfg.save_frames:
+                    spara = reading.ok or not cfg.save_only_success
+                else:
+                    spara = reading.ok
+                if spara:
                     middle = indices[len(indices) // 2]
                     payload = jpegs[middle]
                     if payload:
@@ -254,25 +393,29 @@ class NightlyRunner:
         *,
         duration_s: float | None = None,
         save: bool = True,
+        stop_when_ready: bool | None = None,
     ) -> RunSummary:
         """En komplett korning: lampa pa -> las -> publicera -> lampa av."""
         cfg = self.cfg.run
         duration = duration_s if duration_s is not None else cfg.window_s
+        stop_early = cfg.stop_when_ready if stop_when_ready is None else stop_when_ready
         started = datetime.now()
 
         run_dir = RUNS_DIR / started.strftime("%Y%m%d_%H%M%S") if save else None
         lamp_is_on = False
         error = ""
         page_note = ""
+        published_to = ""
         original_camera_xml = ""
         readings: list[Reading] = []
         details: list[dict] = []
         result = Consensus(value=None, votes=0, total=0, confidence=0.0)
 
         log.info("startar korning (version %s), fonster %.0f s", VERSION, duration)
+        set_state(running=True, started=started.isoformat(timespec="seconds"))
 
         try:
-            self.mqtt.connect()
+            mqtt_up, rest_up = self._open_publishers()
 
             if self.use_camera_profile:
                 original_camera_xml = self._apply_camera_profile()
@@ -292,7 +435,11 @@ class NightlyRunner:
             elif self.use_lamp:
                 log.warning("ingen lampa konfigurerad - laser utan belysning")
 
-            readings, saved = self._capture_and_read(duration_s=duration, frames_dir=run_dir)
+            readings, saved = self._capture_and_read(
+                duration_s=duration,
+                frames_dir=run_dir,
+                stop_when_ready=stop_early,
+            )
 
             # Vardet som ska ut visas strax efter att pumpen slog om till spolning
             # (02:00). Sidvarvet ar: klockan -> spolttiden -> VARDET -> flodet,
@@ -338,16 +485,22 @@ class NightlyRunner:
             )
 
             evidence = self._pick_evidence(saved, result.value)
+            image = str(evidence) if evidence else None
 
             if result.ok:
-                self.mqtt.publish_result(
-                    result,
-                    read_at=datetime.now(),
-                    image=str(evidence) if evidence else None,
+                if mqtt_up:
+                    self.mqtt.publish_result(result, read_at=datetime.now(), image=image)
+                if rest_up:
+                    self.rest.publish_result(result, read_at=datetime.now(), image=image)
+                published_to = "+".join(
+                    name for name, up in (("mqtt", mqtt_up), ("rest", rest_up)) if up
                 )
             else:
                 reason = _failure_reason(readings, cfg.min_confidence, note=page_note)
-                self.mqtt.publish_failure(reason)
+                if mqtt_up:
+                    self.mqtt.publish_failure(reason)
+                if rest_up:
+                    self.rest.publish_failure(reason)
                 if cfg.notify_on_failure and self.ha.configured:
                     self.ha.notify(f"Kunde inte lasa pumpdisplayen: {reason}")
                 error = error or reason
@@ -376,34 +529,113 @@ class NightlyRunner:
                 confidence=result.confidence,
                 lamp_used=lamp_is_on,
                 frames_dir=str(run_dir) if run_dir else None,
+                image=image,
                 error=error,
                 page_note=page_note,
                 details=details,
+                published_to=published_to,
             )
+
+            # Senaste lasningen pa disk, for vardestjansten och Home Assistant.
+            # Skrivs aven nar lasningen misslyckades, sa att HA ser att nagot ar
+            # fel i stallet for att visa ett gammalt varde.
+            write_status(summary, unit=self.cfg.mqtt.unit, decimals=self.cfg.reader.decimals)
 
             if run_dir is not None:
                 run_dir.mkdir(parents=True, exist_ok=True)
                 (run_dir / "summary.json").write_text(summary.to_json(), encoding="utf-8")
 
             self.mqtt.disconnect()
+            self.rest.disconnect()
             self.camera.close()
+            set_state(
+                running=False,
+                last_finished=summary.finished,
+            )
 
         return summary
 
     def run_forever(self) -> None:
-        """Vantar in nasta klockslag och kor, om och om igen."""
+        """Vantar in nasta klockslag och kor, om och om igen.
+
+        Startar ocksa vardestjansten, sa att Home Assistant kan lasa senaste
+        vardet nar som helst - inte bara i den stund korningen paga.
+        """
+        from status_server import StatusServer
+
+        status = StatusServer()
+        status.start()
+        try:
+            self._run_forever()
+        finally:
+            status.stop()
+
+    def next_interval_start(self, *, after: datetime | None = None) -> datetime:
+        """Nasta korning i lage 'intervall'."""
+        after = after or datetime.now()
+        return after + timedelta(seconds=max(60.0, self.cfg.run.every_minutes * 60.0))
+
+    def busy(self) -> bool:
+        """Ar en lasning redan i gang (t.ex. 'Las nu' i granssnittet)?
+
+        Bada kor i samma process, och kameran kan bara anvandas av en i taget -
+        den schemalagda korningen hoppar darfor over i stallet for att krocka.
+        """
+        from status_server import get_state
+
+        return bool(get_state().get("running"))
+
+    def run_once_if_free(self) -> RunSummary | None:
+        """Kor om ingen annan lasning paga, annars None."""
+        if self.busy():
+            log.warning("en lasning paga redan - hoppar over den har gangen")
+            return None
+        return self.run_once()
+
+    def _run_forever(self) -> None:
+        """Kor enligt laget i MODE - natt, intervall eller bara pa begaran."""
+        mode = self.cfg.run.mode
+
+        if mode == "manuell":
+            # Ingen automatisk lasning alls. Tjansten star kvar och vantar pa att
+            # nagon trycker "Las nu" i granssnittet (eller knappen i HA).
+            log.info(
+                "MODE=manuell - ingen lasning startas automatiskt, tryck 'Las nu' i granssnittet"
+            )
+            set_state(next_run=None, mode=mode)
+            while True:
+                time.sleep(30.0)
+
+        if mode == "intervall":
+            log.info(
+                "MODE=intervall - laser nu och sedan var %.0f minut", self.cfg.run.every_minutes
+            )
+            while True:
+                set_state(mode=mode)
+                summary = self.run_once_if_free()
+                if summary is not None:
+                    log.info(
+                        "klar: varde=%s roster=%d konfidens=%.2f fel=%s",
+                        summary.value, summary.votes, summary.confidence, summary.error or "-",
+                    )
+                target = self.next_interval_start()
+                set_state(next_run=target.isoformat(timespec="seconds"))
+                self.wait_until(target)
+
+        # MODE=natt: vanta in klockslaget och las tills vardet ar fangat.
         while True:
             target = self.next_run_time()
             start_at = target - timedelta(seconds=self.cfg.run.pre_start_s)
             log.info("nasta korning startar %s", start_at.strftime("%Y-%m-%d %H:%M:%S"))
+            set_state(next_run=start_at.isoformat(timespec="seconds"), mode=mode)
 
             self.wait_until(start_at)
-            summary = self.run_once()
-
-            log.info(
-                "klar: varde=%s roster=%d konfidens=%.2f fel=%s",
-                summary.value, summary.votes, summary.confidence, summary.error or "-",
-            )
+            summary = self.run_once_if_free()
+            if summary is not None:
+                log.info(
+                    "klar: varde=%s roster=%d konfidens=%.2f fel=%s",
+                    summary.value, summary.votes, summary.confidence, summary.error or "-",
+                )
 
             # Sov vidare till strax efter att korningen borde vara slut.
             next_target = self.next_run_time()
@@ -432,7 +664,61 @@ def page_kind(reading: Reading) -> str:
 # stilla i 10-12 s, och da blir hela sidan EN grupp pa 14-20 bilder, medan en
 # toning bara ger en eller ett par bilder. Uppmatt pa korningarna
 # captures/runs/20260920_2101-2108: vardesidan 14-20 bilder, toningarna 1 bild.
-PAGE_MIN_FRAMES = 4
+PAGE_MIN_FRAMES = 3
+
+# Hur manga bilder pa vardesidan som behovs innan vi vet att den ar fangad.
+# Displayen visar vardet strax efter att den visat spolttiden (02:00), och
+# vardet star stilla i 10-12 s. Med en bild varannan sekund blir det nagra
+# bilder - och de behover inte komma direkt efter varandra, for en enstaka
+# bild mitt i ett sidbyte kan bli fel utan att vardet ar ett annat.
+READY_FRAMES = 3
+
+
+class ReadyTracker:
+    """Haller reda pa om vardesidan efter spolttiden har synts i bilderna.
+
+    Displayen visar sina sidor i samma ordning hela tiden:
+
+        klockan  ->  spolttiden 02:00  ->  VARDET  ->  flodet  ->  klockan ...
+
+    Vardet vi vill ha ar alltsa sidan som kommer direkt efter 02:00 - varje
+    varv, hela dygnet. Korningen tittar darfor pa displayen tills den visat
+    02:00 OCH vardesidan efter den synts nagra bilder i rad. Da ar saken klar
+    och lasningen kan sluta: vardet star stilla i 10-12 s, och det andras inte
+    igen forran nasta spolning.
+    """
+
+    def __init__(self, frames: int = READY_FRAMES) -> None:
+        self.frames = frames
+        self.saw_recharge = False
+        self.value: str | None = None
+        self.counts: Counter[str] = Counter()
+
+    @property
+    def streak(self) -> int:
+        """Hur manga bilder det vanligaste vardet vilar pa."""
+        return max(self.counts.values(), default=0)
+
+    def feed(self, reading: Reading) -> bool:
+        """Raknar in en bild och svarar pa om vardet ar fangat."""
+        if is_recharge_page(reading):
+            # Spolttiden visar att ett nytt varv borjar: vardet kommer efter den.
+            self.saw_recharge = True
+            self.value = None
+            self.counts.clear()
+            return False
+
+        if not self.saw_recharge or not reading.ok or reading.confidence <= 0.0:
+            return False
+
+        if not reading.value:
+            return False
+
+        # Bilderna behover inte komma direkt efter varandra: en enstaka bild mitt
+        # i ett sidbyte kan lasta fel utan att vardet ar ett annat.
+        self.counts[reading.value] += 1
+        self.value, antal = self.counts.most_common(1)[0]
+        return antal >= self.frames
 
 
 def is_recharge_page(reading: Reading) -> bool:
@@ -558,17 +844,34 @@ def _value_page_window(readings: list[Reading], anchor: int) -> tuple[list[int],
 def _page_value(readings: list[Reading], window: list[int]) -> str | None:
     """Vardet pa den sida fonstret visar forst.
 
-    Den forsta gruppen i fonstret kan vara en toning som last fel - en
-    halvfardig siffra ger ett varde som inte finns pa displayen. En riktig sida
-    vilar pa manga bilder, sa vardet tas fran den forsta grupp som ar stor nog
-    att vara en sida. Finns ingen sadan (ett kort fonster) tas den forsta
-    gruppen, och da ar ordningen i sidvarvet enda ledtraden.
+    Fonstret borjar direkt efter spolttidssidan, sa den FORSTA sidan dar ar
+    vardet vi vill ha. Tva saker gjorde det svarare an det later:
+
+    * En toning mitt i ett sidbyte blir en egen liten grupp, och kan lasas som
+      ett varde som inte finns pa displayen.
+    * Displayen flimrar, sa en och samma sida kan bli flera grupper - ibland
+      bara tva bilder i varje.
+
+    Vikten raknas derfor ihop per varde: det forsta vardet vars grupper
+    tillsammans vilar pa tillrackligt manga bilder ar sidan. Da kan flodet, som
+    kommer efterat, aldrig ta over - och korningen kan sluta sa snart vardet ar
+    fangat utan att riskera att fa flodets 0.00 i stallet.
     """
-    solid = [
-        position for position in window if max(1, readings[position].weight) >= PAGE_MIN_FRAMES
-    ]
-    first = solid[0] if solid else window[0]
-    return readings[first].value
+    if not window:
+        return None
+
+    vikt: dict[str, int] = {}
+    for position in window:
+        value = readings[position].value
+        if not value:
+            continue
+        vikt[value] = vikt.get(value, 0) + max(1, readings[position].weight)
+        if vikt[value] >= PAGE_MIN_FRAMES:
+            return value
+
+    # Ingen grupp blev stor nog (ett kort fonster): da ar ordningen i sidvarvet
+    # enda ledtraden.
+    return readings[window[0]].value
 
 
 def _safe_name(value: str | None) -> str:

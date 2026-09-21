@@ -1,0 +1,61 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Vattenkamera",
+        "description": "Address of the service that reads the pump display (the Vattenkamera LXC). The port is STATUS_PORT in the service settings.",
+        "data": {
+          "host": "Address",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "ingen_kontakt": "Could not reach the service at that address. Check the IP, the port and that the service is running.",
+      "fel_svar": "The service answered, but it was not Vattenkamera."
+    },
+    "abort": {
+      "already_configured": "That address is already added."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Vattenkamera",
+        "data": {
+          "scan_interval": "How often to fetch the value (seconds)",
+          "allow_run": "Allow the 'Read now' button"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "niva": {
+        "name": "Level"
+      },
+      "senast_last": {
+        "name": "Last read"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "ok": "Read",
+          "laser_nu": "Reading now",
+          "ingen_lasning": "No reading",
+          "okontaktbar": "Unreachable"
+        }
+      }
+    },
+    "binary_sensor": {
+      "lasning_ok": {
+        "name": "Last read OK"
+      }
+    },
+    "button": {
+      "las_nu": {
+        "name": "Read now"
+      }
+    }
+  }
+}
