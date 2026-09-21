@@ -469,6 +469,25 @@
 				"120"
 			],
 			"group": "build"
+		},
+		{
+			"label": "Stabilitet: senaste dygnet",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\daily_report.py"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Stabilitet: allt i historiken",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\daily_report.py",
+				"--alla"
+			],
+			"group": "build"
 		}
 	]
 }

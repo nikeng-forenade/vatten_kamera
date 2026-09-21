@@ -151,6 +151,7 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `main.py status` | Startar bara webbgränssnittet på `STATUS_PORT` |
 | `main.py cleanup --dagar 7` | Tar bort bilder äldre än 7 dygn (`--dry` visar utan att ta bort) |
 | `tools/import_history.py` | Fyller grafen med körningar som redan ligger på disk |
+| `tools/daily_report.py` | Sammanfattar hur tjänsten gått (luckor, takt, konfidens) |
 
 ## Inställningar i `.env`
 
@@ -321,9 +322,22 @@ bild kvar även om tjänsten stått still. Vill du se vad som skulle tas bort:
 run.cmd main.py cleanup --dagar 7 --dry
 ```
 
-Ungefärlig storlek: en läsning var femte minut ger ~90 MB per dygn med bara bevisbilden
-(`SAVE_FRAMES=false`), alltså ~600 MB för sju dygn. Slår du på `SAVE_FRAMES` blir det
-flera gånger mer — den är till för att kunna mäta om avläsaren, inte för drift.
+Ungefärlig storlek: beviset är ~110 kB och en läsning var tionde minut ger därför **~16 MB
+per dygn**, alltså drygt 100 MB för sju dygn (mätt 2026-09-21). Slår du på `SAVE_FRAMES`
+sparas **alla** sidor från körningen i stället (en per grupp, ett par MB per läsning) — den är
+till för att kunna mäta om avläsaren, inte för drift.
+
+### Har den varit stabil?
+
+```powershell
+run.cmd tools\daily_report.py            # senaste dygnet
+run.cmd tools\daily_report.py --alla     # allt i historiken
+```
+
+Rapporten visar antal läsningar, hur många som gav ett värde, värdets utveckling, **längsta
+luckan** mellan två läsningar (där tjänsten stått still), hur takten stämmer med
+`EVERY_MINUTES`, konfidensens läge och vilka körningar som misslyckades. Finns även som
+VS Code-uppgiften **Stabilitet: senaste dygnet**.
 
 ### Grafen i gränssnittet
 

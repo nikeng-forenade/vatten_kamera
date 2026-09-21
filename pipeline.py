@@ -339,13 +339,17 @@ class NightlyRunner:
         duration_s: float,
         frames_dir: Path | None,
         stop_when_ready: bool = True,
-    ) -> tuple[list[Reading], list[tuple[Reading, Path]]]:
+    ) -> tuple[list[Reading], list[tuple[Reading, Path]], list[tuple[Reading, bytes]]]:
         """Tar bilder under `duration_s`, vager samman lika bilder och tolkar dem.
 
         Displayen flimrar: nagra bilder tas mitt i en uppdatering och har svagare
         siffror. Vi samlar darfor alla utsnitt forst, slar ihop de som visar
         samma sida och tolkar den typiska bilden (medianen pixel for pixel).
         Medianen vags inte ner av de svaga bilderna, sa siffrorna star kvar.
+
+        Returnerar (lasningar, sparade filer, bilder i minnet). Den sista listan
+        ar de sidor som gick att lasa - ur den skrivs bevisbilden nar
+        SAVE_FRAMES ar av.
         """
         cfg = self.cfg.run
         reader_cfg = self.cfg.reader
@@ -399,7 +403,7 @@ class NightlyRunner:
             time.sleep(max(0.0, cfg.interval_s - (time.time() - frame_started)))
 
         if not crops:
-            return [], []
+            return [], [], []
 
         groups = group_similar(crops, self.similarity_threshold)
         log.info("%d bilder i %d grupper (samma sida slas ihop till en typisk bild)",
@@ -407,6 +411,10 @@ class NightlyRunner:
 
         readings: list[Reading] = []
         saved: list[tuple[Reading, Path]] = []
+        # Bilder som gick att lasa, i minnet: nar SAVE_FRAMES ar av sparas bara
+        # bevisbilden for det varde som till slut publiceras - en bild i stallet
+        # for en per lasbar sida. Da blir ett dygn nagra tiotals MB, inte hundra.
+        kandidater: list[tuple[Reading, bytes]] = []
 
         for group_number, indices in enumerate(groups, start=1):
             typical = typical_crops(crops, indices)
@@ -429,17 +437,13 @@ class NightlyRunner:
             else:
                 log.info("grupp %d (%d bilder): inget varde", group_number, len(indices))
 
-            if frames_dir is not None:
-                # En bild per grupp som gick att lasa sparas ALLTID: den bilden ar
-                # beviset som granssnittet och Home Assistant visar. Hela serien
-                # (aven grupper utan varde) sparas bara nar SAVE_FRAMES=true.
-                if cfg.save_frames:
-                    spara = reading.ok or not cfg.save_only_success
-                else:
-                    spara = reading.ok
-                if spara:
-                    middle = indices[len(indices) // 2]
-                    payload = jpegs[middle]
+            middle = indices[len(indices) // 2]
+            payload = jpegs[middle]
+
+            if frames_dir is not None and cfg.save_frames:
+                # Hela serien sparas: aven sidor utan varde (om inte
+                # SAVE_ONLY_SUCCESS), sa att avlasaren kan matas om i efterhand.
+                if reading.ok or not cfg.save_only_success:
                     if payload:
                         frames_dir.mkdir(parents=True, exist_ok=True)
                         path = frames_dir / (
@@ -448,8 +452,39 @@ class NightlyRunner:
                         )
                         path.write_bytes(payload)
                         saved.append((reading, path))
+            elif reading.ok and payload:
+                kandidater.append((reading, payload))
 
-        return readings, saved
+        # Spara ett forslag per lasbar sida i minnet. Vilken som blir beviset
+        # avgor rostningen i run_once - det ar ju vardet som publiceras som ska
+        # kunna kontrolleras, inte den sida som rakar ha hogst konfidens.
+        return readings, saved, kandidater
+
+    def _skriv_bevis(
+        self,
+        run_dir: Path | None,
+        kandidater: list[tuple[Reading, bytes]],
+        value: str | None,
+    ) -> Path | None:
+        """Skriver bilden for det varde som publiceras.
+
+        Anvands nar SAVE_FRAMES ar av: da sparas bara en bild per korning -
+        beviset - i stallet for en per lasbar sida.
+        """
+        if run_dir is None or value is None:
+            return None
+        matchande = [(r, data) for r, data in kandidater if r.value == value]
+        if not matchande:
+            return None
+        reading, payload = max(matchande, key=lambda par: (par[0].confidence, par[0].weight))
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            path = run_dir / f"bevis_{_safe_name(value)}.jpg"
+            path.write_bytes(payload)
+            return path
+        except OSError as exc:
+            log.warning("kunde inte spara bevisbilden: %s", exc)
+            return None
 
     def _pick_evidence(self, saved: list[tuple[Reading, Path]], value: str | None) -> Path | None:
         """Valjer den bild som bast visar det varde vi kom fram till."""
@@ -511,7 +546,7 @@ class NightlyRunner:
             elif self.use_lamp:
                 log.warning("ingen lampa konfigurerad - laser utan belysning")
 
-            readings, saved = self._capture_and_read(
+            readings, saved, kandidater = self._capture_and_read(
                 duration_s=duration,
                 frames_dir=run_dir,
                 stop_when_ready=stop_early,
@@ -561,6 +596,9 @@ class NightlyRunner:
             )
 
             evidence = self._pick_evidence(saved, result.value)
+            if evidence is None:
+                # SAVE_FRAMES=av: da skrivs bara beviset, har.
+                evidence = self._skriv_bevis(run_dir, kandidater, result.value)
             image = str(evidence) if evidence else None
 
             if result.ok:
