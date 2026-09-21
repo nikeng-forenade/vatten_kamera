@@ -42,7 +42,7 @@ show_help() {
   echo "Anvandning: bash proxmox-create.sh [CT_ID] [LAGRING] [BRYGGA] [IP/CIDR] [GATEWAY] [flaggor]"
   echo ""
   echo "Flaggor (skickas vidare till install.sh):"
-  echo "  --run-at HH:MM:SS        Klockslaget da vardet visas (pumpens klocka)"
+  echo "  --run-at HH:MM:SS        Klockslaget da vardet visas (DATORNS tid - pumpens klocka gar efter)"
   echo "  --camera-ip IP           Kamerans adress"
   echo "  --camera-user NAMN       Kamerans anvandare"
   echo "  --camera-password LOSEN  Kamerans losenord"

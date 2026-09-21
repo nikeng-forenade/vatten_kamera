@@ -70,6 +70,11 @@ STATUS_LIVE = _get_bool("STATUS_LIVE", True)
 # Far man starta en lasning respektive starta om tjansten fran granssnittet?
 STATUS_ALLOW_RUN = _get_bool("STATUS_ALLOW_RUN", True)
 STATUS_ALLOW_RESTART = _get_bool("STATUS_ALLOW_RESTART", True)
+
+# Pausen mellan tva lasningar nar MODE=intervall och EVERY_MINUTES=0 ("hela
+# tiden"). En lasning tar en dryg minut anda, sa pausen ar bara sa att kameran
+# hinner stalla in sig och loggen gar att lasa.
+INTERVAL_PAUSE_S = 5.0
 # Senaste lasningen, sa att svaret finns kvar aven efter en omstart.
 LATEST_FILE = Path(_get("LATEST_FILE") or DATA_DIR / "latest.json")
 # Loggfilen som granssnittet visar de sista raderna ur.
@@ -136,13 +141,18 @@ class RunConfig:
     """Nar och hur lange vi laser displayen."""
 
     # Hur lasningen startas:
-    #   natt      - en gang per dygn, strax innan RUN_AT
-    #   intervall - direkt vid start och sedan var EVERY_MINUTES minut
+    #   intervall - laser hela tiden, en lasning var EVERY_MINUTES minut
+    #               (0 = direkt efter den forra, alltsa i praktiken hela tiden)
     #   manuell   - bara nar du sjalv trycker "Las nu" (granssnittet eller
     #               knappen i Home Assistant)
-    mode: str = "natt"
-    # Hur ofta vi laser i lage 'intervall'.
-    every_minutes: float = 10.0
+    #   natt      - en gang per dygn, strax innan RUN_AT
+    #
+    # Varje lasning tittar pa displayen tills den visar spolttiden 02:00 och tar
+    # vardet fran sidan efter den - sa klockslaget behovs egentligen bara for att
+    # slippa lasa i onodan.
+    mode: str = "intervall"
+    # Hur ofta vi laser i lage 'intervall'. 0 = sa snart den forra ar klar.
+    every_minutes: float = 5.0
     # Klockslaget da vardet dyker upp (lokal tid).
     run_at: str = "02:00:00"
     # Hur lange innan vi startar. Marginalen ar till for att korningen ska hinna
@@ -265,8 +275,8 @@ def load_config() -> Config:
     )
 
     run = RunConfig(
-        mode=_read_mode(_get("MODE", "natt")),
-        every_minutes=_get_float("EVERY_MINUTES", 10.0),
+        mode=_read_mode(_get("MODE", "intervall")),
+        every_minutes=_get_float("EVERY_MINUTES", 5.0),
         run_at=_get("RUN_AT", "02:00:00"),
         pre_start_s=_get_float("PRE_START_S", 300.0),
         window_s=_get_float("WINDOW_S", 900.0),
@@ -314,9 +324,9 @@ def _publish_target(raw: str) -> str:
 
 
 def _read_mode(raw: str) -> str:
-    """Laser MODE ur .env. Ett okant varde blir 'natt'."""
-    value = (raw or "natt").strip().lower()
-    return value if value in {"natt", "intervall", "manuell"} else "natt"
+    """Laser MODE ur .env. Ett okant varde blir 'intervall'."""
+    value = (raw or "intervall").strip().lower()
+    return value if value in {"natt", "intervall", "manuell"} else "intervall"
 
 
 def _parse_roi(raw: str) -> tuple[int, int, int, int] | None:

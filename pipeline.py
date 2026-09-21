@@ -21,7 +21,15 @@ from pathlib import Path
 import numpy as np
 
 from camera import CameraError, HikvisionCamera
-from config import CAPTURES_DIR, LATEST_FILE, ROOT, VERSION, Config, load_config
+from config import (
+    CAPTURES_DIR,
+    INTERVAL_PAUSE_S,
+    LATEST_FILE,
+    ROOT,
+    VERSION,
+    Config,
+    load_config,
+)
 from display_reader import (
     Calibration,
     Consensus,
@@ -565,15 +573,25 @@ class NightlyRunner:
 
         status = StatusServer()
         status.start()
+        set_state(loop=True)
         try:
             self._run_forever()
         finally:
+            set_state(loop=False)
             status.stop()
 
     def next_interval_start(self, *, after: datetime | None = None) -> datetime:
-        """Nasta korning i lage 'intervall'."""
+        """Nasta korning i lage 'intervall'.
+
+        EVERY_MINUTES=0 betyder "hela tiden": nasta lasning startar direkt efter
+        den forra. En lasning tar en dryg minut, sa en kort paus behovs anda sa
+        att loggen gar att lasa och kameran hinner stalla in sig.
+        """
         after = after or datetime.now()
-        return after + timedelta(seconds=max(60.0, self.cfg.run.every_minutes * 60.0))
+        minuter = self.cfg.run.every_minutes
+        if minuter <= 0:
+            return after + timedelta(seconds=INTERVAL_PAUSE_S)
+        return after + timedelta(seconds=max(60.0, minuter * 60.0))
 
     def busy(self) -> bool:
         """Ar en lasning redan i gang (t.ex. 'Las nu' i granssnittet)?
@@ -607,9 +625,13 @@ class NightlyRunner:
                 time.sleep(30.0)
 
         if mode == "intervall":
-            log.info(
-                "MODE=intervall - laser nu och sedan var %.0f minut", self.cfg.run.every_minutes
-            )
+            if self.cfg.run.every_minutes <= 0:
+                log.info("MODE=intervall - laser hela tiden (EVERY_MINUTES=0)")
+            else:
+                log.info(
+                    "MODE=intervall - laser nu och sedan var %.0f minut",
+                    self.cfg.run.every_minutes,
+                )
             while True:
                 set_state(mode=mode)
                 summary = self.run_once_if_free()

@@ -16,8 +16,8 @@ REPO="https://github.com/nikeng-forenade/vatten_kamera.git"
 SERVICE="vatten-kamera"
 
 RUN_AT="02:05:00"
-MODE="natt"
-EVERY_MINUTES="10"
+MODE="intervall"
+EVERY_MINUTES="5"
 CAMERA_IP="192.168.1.213"
 CAMERA_USER="admin"
 CAMERA_PASSWORD=""
@@ -31,9 +31,9 @@ usage() {
   cat <<'TEXT'
 Anvandning: bash install.sh [flaggor]
 
-  --run-at HH:MM:SS        Klockslaget da vardet visas (pumpens klocka)
-  --mode natt|intervall|manuell  Nar den ska lasa (standard natt)
-  --every-minutes X        Hur ofta i lage intervall (standard 10)
+  --run-at HH:MM:SS        Klockslaget da vardet visas (DATORNS tid - pumpens klocka gar efter)
+  --mode intervall|manuell|natt   Nar den ska lasa (standard intervall)
+  --every-minutes X        Hur ofta i lage intervall (0 = hela tiden, standard 5)
   --camera-ip IP           Kamerans adress (standard 192.168.1.213)
   --camera-user NAMN       Kamerans anvandare (standard admin)
   --camera-password LOSEN  Kamerans losenord
@@ -145,8 +145,8 @@ THRESHOLD=250
 # tacker att klockan gar olika mycket efter.
 MIN_CONFIDENCE=0.35
 MIN_AGREEMENT=3
-# natt = en gang per dygn (RUN_AT) · intervall = var EVERY_MINUTES minut ·
-# manuell = bara nar nagon trycker "Las nu" i granssnittet eller i HA.
+# intervall = laser hela tiden (var EVERY_MINUTES minut, 0 = sa snart den forra
+# ar klar) · manuell = bara nar nagon trycker "Las nu" · natt = en gang per dygn.
 MODE=${MODE}
 EVERY_MINUTES=${EVERY_MINUTES}
 RUN_AT=${RUN_AT}

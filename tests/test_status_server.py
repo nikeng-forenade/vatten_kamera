@@ -95,7 +95,10 @@ def test_health_sager_att_tjansten_lever(server: StatusServer) -> None:
     assert status == 200
     assert data["ok"] is True
     assert data["kor"] is False
-    assert data["nasta_korning"]  # en tid, oavsett nar testet kors
+    # Tiden beror pa laget i .env (i lage manuell vantar ingen tid alls), sa
+    # testet kollar att nycklarna finns - inte vad klockan står pa.
+    assert "nasta_korning" in data
+    assert data["lage"] in {"natt", "intervall", "manuell"}
 
 
 def test_latest_ger_vardet_och_en_bildadress(server: StatusServer) -> None:
@@ -193,7 +196,7 @@ def test_bildadress_bara_innanfor_bilder() -> None:
 def test_nasta_korning_ar_framat_i_tiden() -> None:
     from datetime import datetime
 
-    tid = next_run_at("02:05:00", 10)
+    tid = next_run_at("02:05:00", 10, mode="natt")
 
     assert tid is not None
     assert datetime.fromisoformat(tid) > datetime.now()

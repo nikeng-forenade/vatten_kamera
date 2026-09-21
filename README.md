@@ -1,15 +1,17 @@
 # vatten_kamera
 
-Läser av pumpdisplayen i källaren efter kl. 02:00 och skickar värdet till Home Assistant.
+Läser av pumpdisplayen i källaren och skickar värdet till Home Assistant.
 
 Displayen visar **liter kvar innan spolning** som ett tal med två decimaler, t.ex. `1.22`
-och `0.50`. Värdet syns bara i **10–12 sekunder** strax efter 02:00. Programmet tittar
-därför på displayen tills den visat spolttiden **02:00** och tar värdet från sidan som
-kommer direkt efter den — sedan slutar det.
+och `0.50`. Den växlar mellan fyra sidor hela dygnet — klockan, spolttiden **02:00**,
+värdet och flödet — och värdet vi vill ha är sidan som kommer **direkt efter 02:00**.
+Programmet tittar därför på displayen tills den visar 02:00 och tar värdet från sidan
+efter den. Sedan slutar det och väntar tills nästa läsning (var `EVERY_MINUTES` minut,
+eller bara när du trycker).
 
 ```mermaid
 flowchart LR
-    A[Börjar titta<br/>före klockslaget] --> B[Tänder lampan]
+    A[Läsningen börjar] --> B[Tänder lampan]
     B --> C[Bild var 1,5:e sekund]
     C --> D{Tidssidan<br/>02:00?}
     D -->|nej| C
@@ -19,6 +21,7 @@ flowchart LR
     F -->|ja| G[Slutar titta<br/>och röstar]
     G --> H[Publicerar värdet]
     H --> I[Släcker lampan]
+    I --> J[Väntar till nästa<br/>läsning]
 ```
 
 ## Så här fungerar avläsningen
@@ -160,9 +163,9 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `COLOR_CHANNEL` | `auto` | `b` för röd LED: siffrorna lyser men den röda glöden blir svart |
 | `THRESHOLD` | `0` | Fast tröskel 0–255. Hög tröskel håller spegelbilden i glaset borta |
 | `UNIT` | tom | Enhet vid sensorn i HA, t.ex. `m3` eller `l` |
-| `MODE` | `natt` | När den läser: `natt`, `intervall` eller `manuell` — se nedan |
-| `EVERY_MINUTES` | `10` | Hur ofta i läget `intervall` |
-| `RUN_AT` | `02:00:00` | Klockslaget värdet visas (pumpens klocka — se nedan) |
+| `MODE` | `intervall` | `intervall` (hela tiden), `manuell` (bara på begäran) eller `natt` — se nedan |
+| `EVERY_MINUTES` | `5` | Hur ofta i läget `intervall`. `0` = så snart den förra är klar |
+| `RUN_AT` | `02:00:00` | Klockslaget i läget `natt`, **datorns tid** (pumpens klocka går efter — se nedan) |
 | `WINDOW_S` | `1800` | Ge inte upp efter så här många sekunder |
 | `INTERVAL_S` | `1.5` | Tid mellan bilderna |
 | `PRE_START_S` | `600` | Hur långt innan klockslaget den börjar titta |
@@ -183,20 +186,28 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 
 ## När ska den läsa?
 
-`MODE` styr om tjänsten läser av sig själv eller bara på begäran:
+`MODE` styr hur ofta tjänsten läser. **Varje läsning tittar på displayen tills den visar
+02:00 och tar värdet efter den sidan** — klockslaget behövs alltså inte för att hitta
+värdet, bara för att slippa läsa i onödan.
 
 | Läge | Vad som händer |
 |---|---|
-| `natt` | En körning per dygn. Den börjar titta `PRE_START_S` innan `RUN_AT` och slutar så snart värdet är fångat. Standard. |
-| `intervall` | Läser direkt när tjänsten startar och sedan var `EVERY_MINUTES` minut. Värdet står stilla tills spolningen ändrar det, så det räcker med en läsning i timmen för att se när det händer. |
+| `intervall` | Läser **hela tiden**: en läsning var `EVERY_MINUTES` minut. Standard. |
 | `manuell` | Läser **aldrig** av sig själv. En läsning startas med **Läs nu** i webbgränssnittet, med `main.py read`, eller med knappen `button.vatten_kamera_las_nu` i Home Assistant. |
+| `natt` | En läsning per dygn, strax innan `RUN_AT`. Sparar ström och kort. |
+
+`EVERY_MINUTES=0` betyder **hela tiden** på riktigt: nästa läsning startar så snart den
+förra är klar. En läsning tar ca en minut, så mellanrummet blir ~1 minut ändå.
+
+Värdet står stilla tills spolningen ändrar det, så **en läsning var femte minut räcker**
+för att se när det händer — och då är värdet som mest fem minuter gammalt i Home
+Assistant. Vill du ha det direkt: sätt `EVERY_MINUTES=1`.
 
 Läget ändras i webbgränssnittet (under **Tider**) eller direkt i `.env`. Tjänsten måste
 startas om efteråt — knappen gör det åt dig.
 
-En körning tar en dryg minut (den väntar in spolttidssidan). Kommer en schemalagd körning
-medan en annan pågår hoppar den över den gången, i stället för att två körningar slåss om
-kameran.
+Kommer en schemalagd läsning medan en annan pågår hoppar den över den gången, i stället
+för att två läsningar slåss om kameran.
 
 ## Entiteter i Home Assistant
 
@@ -573,13 +584,16 @@ i `/opt/vattenkamera/data` — så en uppdatering av koden rör inte installatio
 
 ### Webbgränssnittet
 
-Öppna `http://<containerns-ip>:8099/` för att se att allt lever:
+Öppna `http://<maskinens-ip>:8099/` för att se att allt lever. Startas med
+`main.py status` (bara gränssnittet) eller automatiskt av `main.py daemon`.
 
 * Senaste värdet, **bilden avläsaren valde** som bevis, och när det lästes
-* Tjänstens läge: nästa körning, om en läsning pågår
+* Tjänstens läge: nästa läsning, om en läsning pågår
+* **Varning om ingen automatisk läsning är igång** — kör du bara gränssnittet läser ingenting
 * Testknappar för kamera, Home Assistant och MQTT
 * **Läs nu** och **Starta om tjänsten**
-* Alla inställningar i `.env` — grupperade, med förklaringar. Bara ändrade fält skrivs
+* Inställningarna i `.env` — grupperade, med förklaringar. Bara fält som hör till valt
+  läsläge visas, och bara ändrade fält skrivs
 * Loggen, direkt i sidan
 * Adressen till HA-integrationen, färdig att kopiera
 
@@ -588,11 +602,12 @@ Sidan uppdaterar sig själv så länge **Live** är ikryssat; stäng av krysset 
 och `STATUS_ALLOW_RESTART` stänger av knapparna, om du inte vill att vem som helst på nätet
 ska kunna starta en läsning.
 
-**Tiden som gäller är pumpens egen klocka, inte datorns.** Spolningen startar när
-pumpens klocka slår det klockslag displayen visar (`02:00`), och pumpens klocka går
-efter — mätt 2026-09-20 visade den 15:15 klockan 15:20:25 och 18:32 klockan 18:37:53,
-alltså **~5 minuter efter**. Därför står `RUN_AT=02:05:00` i `.env`. Har du ställt
-pumpens klocka rätt sätter du tillbaka `RUN_AT` till `02:00:00`.
+**Tiden som gäller är datorns klocka, men spolningen startar när pumpens egen klocka
+slår `02:00` — och pumpens klocka går efter.** Mätt 2026-09-20 visade den 15:15 klockan
+15:20:25 och 18:32 klockan 18:37:53, och 2026-09-21 visade den `18:23` klockan 18:29:06 och
+`18:25` klockan 18:31:06 — alltså **~6 minuter efter**. Pumpens 02:00 är därför datorns
+~02:06, och `RUN_AT=02:05:00` i `.env` betyder *datorns* tid strax innan dess. Har du
+ställt pumpens klocka rätt sätter du `RUN_AT` till `02:00:00`.
 
 Fönstret är generöst tilltaget (tio minuter innan, trettio minuter efter), men
 körningen **slutar så snart värdet är fångat**. Displayen visar sina sidor i samma
@@ -608,9 +623,10 @@ efter den synts några bilder i rad, och slutar då. Klockslaget i `RUN_AT` är 
 startpunkt, inte ett krav: vi vet att pumpens klocka går efter, och i stället för att gissa
 hur mycket tittar vi tills vi ser 02:00 på displayen.
 
-Varför inte bara läsa värdet när som helst på dygnet? Jo, det går — värdet står ju kvar
-tills nästa spolning. Men genom att läsa i samband med spolningen får du värdet *före*
-spolningen, vilket är det du vill ha in i Home Assistant.
+Varför läsa i samband med spolningen? Värdet står ju kvar tills nästa spolning, så det går
+bra att läsa när som helst — men genom att läsa strax innan får du värdet *före*
+spolningen, vilket är det du vill ha in i Home Assistant. Standardläget `intervall` gör
+båda: det läser jämnt och fångar ändringen inom några minuter.
 
 Kontrollera avvikelsen själv: kör `run.cmd main.py watch --minutes 3` och jämför
 klockslaget som visas med vad klockan är.

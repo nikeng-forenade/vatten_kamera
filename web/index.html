@@ -63,6 +63,7 @@
             font-size: .74rem; color: #a7aec2; max-height: 320px; overflow: auto;
             white-space: pre-wrap; font-family: ui-monospace, Consolas, monospace; }
   .hint { font-size: .78rem; color: var(--dim); margin-top: 8px; }
+  .warn { color: #ffc266; }
   .live-toggle { display: flex; align-items: center; gap: 6px; font-size: .82rem; color: var(--dim);
                  margin-left: auto; cursor: pointer; user-select: none; }
   .live-toggle input { accent-color: var(--green); }
@@ -119,6 +120,11 @@
     <button id="restart">Starta om tjänsten</button>
     <span id="msg"></span>
   </div>
+  <p class="hint warn" id="daemonVarning" hidden>
+    Ingen automatisk läsning är igång — det här är bara gränssnittet. Starta tjänsten
+    (<code>main.py daemon</code>, eller systemd-tjänsten <code>vatten-kamera</code>) så läser den
+    enligt läsläget.
+  </p>
   <section class="panel">
     <h2>Inställningar</h2>
     <form id="form"></form>
@@ -177,40 +183,34 @@ async function refreshStatus() {
     ? `läser just nu (startade ${health.startad || ''})`
     : `tjänsten uppe i ${Math.floor((health.uppe_s || 0) / 60)} min`;
 
-  const lage = health.lage || 'natt';
+  const lage = health.lage || 'intervall';
   const service = [];
   if (lage === 'manuell') {
     service.push('läser bara när du trycker "Läs nu"');
-    if (health.kor) service.push(`läser just nu (startade ${health.startad || ''})`);
-  } else if (lage === 'intervall') {
-    if (health.nasta_korning) {
-      service.push(`nästa körning: ${klockaAv(health.nasta_korning)} (om ${countdown(health.nasta_korning)})`);
-    } else {
-      service.push('nästa körning: strax efter start');
-    }
-    service.push(`värdet läses var ${health.var_minuter} minut`);
+  } else if (health.nasta_korning) {
+    service.push(`nästa läsning: ${klockaAv(health.nasta_korning)} (om ${countdown(health.nasta_korning)})`);
   } else {
-    if (health.nasta_korning) {
-      service.push(`nästa körning: ${klockaAv(health.nasta_korning)} (om ${countdown(health.nasta_korning)})`);
-    } else {
-      service.push('nästa körning: okänd');
-    }
-    service.push('då visar displayen strax 02:00 — värdet läses efter den sidan');
+    service.push('nästa läsning: strax');
   }
+  if (health.kor) service.push(`läser just nu (startade ${health.startad || ''})`);
   if (latest.ok) service.push(`senaste värdet: ${latest.display} (${ago(health.aldsta_lasning_s)} sedan)`);
   else service.push(`senaste läsningen: ${latest.error || 'misslyckades'}`);
   $('state-service').textContent = service.join(' · ');
 
+  // En rad om hur den jobbar - inte mer.
+  const varMinuter = Number(health.var_minuter);
+  const takt = varMinuter > 0
+    ? `en ny läsning med <b>${varMinuter}</b> minuters mellanrum`
+    : 'nästa läsning startar direkt efter den förra';
   $('modeText').innerHTML = {
-    natt: 'Läget <b>natt</b>: en körning per dygn. Den startar strax innan klockslaget i '
-      + 'inställningarna och läser tills displayen visat <b>02:00</b> och värdet efter den '
-      + 'sidan är fångat — sedan slutar den. Klockslaget är datorns tid, alltså pumpens '
-      + '02:00 (pumpens klocka går efter).',
-    intervall: 'Läget <b>intervall</b>: den läser direkt när tjänsten startar och sedan var '
-      + 'X minut (ställs in under <i>Tider</i>). Värdet står stilla tills spolningen ändrar '
-      + 'det, så en läsning i timmen räcker för att se när det händer.',
-    manuell: 'Läget <b>manuell</b>: den läser <b>aldrig</b> av sig själv. Du startar en '
-      + 'läsning med <b>Läs nu</b> här, eller med knappen i Home Assistant.',
+    intervall: `Den läser hela tiden: ${takt}. Varje läsning tittar på displayen tills `
+      + 'den visar <b>02:00</b> och tar värdet efter den sidan, sedan slutar den '
+      + '(en läsning tar ca en minut).',
+    manuell: 'Läget <b>manuell</b>: ingen läsning startas av sig själv. Tryck '
+      + '<b>Läs nu</b> här, eller använd knappen i Home Assistant.',
+    natt: 'Läget <b>natt</b>: en läsning per dygn, strax innan klockslaget i '
+      + 'inställningarna. Den tittar på displayen tills den visar <b>02:00</b> och tar värdet '
+      + 'efter den sidan — sedan slutar den.',
   }[lage] || '';
 
   if (latest.ok && latest.numeric !== null) {
@@ -235,6 +235,9 @@ async function refreshStatus() {
 
   $('run').disabled = !!health.kor || health.far_lasa === false;
   $('restart').disabled = health.far_starta_om === false;
+  // Granssnittet kan startas ensamt (main.py status) - da laser ingenting av sig
+  // sjalv, och det ar bra att veta varfor.
+  $('daemonVarning').hidden = !!health.loop;
 
   $('integrationHint').innerHTML =
     `Adress till Home Assistant-integrationen (HACS): <code>${health.adress || ''}</code>`;
@@ -341,11 +344,29 @@ async function loadConfig() {
     form.appendChild(box);
   });
 
+  applyModeVisibility();
+
+  const modeInput = $('f_MODE');
+  if (modeInput) modeInput.addEventListener('change', applyModeVisibility);
+
   form.addEventListener('input', (event) => {
     const key = event.target.dataset.key;
     const error = form.querySelector(`#fel_${key}`);
     if (error) error.remove();
     event.target.classList.remove('bad');
+  });
+}
+
+function applyModeVisibility() {
+  // Ett falt som bara hor till ett lage (t.ex. klockslaget i lage natt) visas
+  // bara nar det laget ar valt.
+  const valt = ($('f_MODE') || {}).value || 'intervall';
+  fields.forEach((field) => {
+    if (!field.bara_i_lage) return;
+    const input = $('f_' + field.key);
+    if (!input) return;
+    const wrap = input.closest('.field') || input.parentElement;
+    wrap.style.display = field.bara_i_lage === valt ? '' : 'none';
   });
 }
 

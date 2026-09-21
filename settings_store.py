@@ -41,6 +41,10 @@ class Field:
     # granssnittet visa "av" for en installning som i sjalva verket ar pa - och
     # skriva ner det nar man trycker Spara.
     default: str = ""
+    # Vissa installningar hor bara till ett lage (t.ex. klockslaget i lage natt).
+    # Da visas de bara nar det laget ar valt - annars ligger de kvar i .env utan
+    # att skrapa i vagen.
+    only_in_mode: str = ""
 
     def as_dict(self, value: str) -> dict:
         """Faltet som granssnittet ritar upp det."""
@@ -55,6 +59,7 @@ class Field:
             "max": self.maximum,
             "value": "" if self.kind == "secret" else value,
             "har_varde": bool(value),
+            "bara_i_lage": self.only_in_mode,
         }
 
 
@@ -67,33 +72,69 @@ FIELDS: tuple[Field, ...] = (
     # --- Tiderna ---------------------------------------------------------
     _field(
         "MODE",
-        "Nar ska den lasa",
+        "Laslaget",
         "Tider",
         kind="choice",
-        choices=("natt", "intervall", "manuell"),
+        choices=("intervall", "manuell", "natt"),
+        default="intervall",
         help=(
-            "natt = en gang per dygn vid klockslaget nedan · "
-            "intervall = direkt vid start och sedan var X minut · "
-            "manuell = bara nar du trycker Las nu (har eller i Home Assistant)"
+            "intervall = laser hela tiden, en lasning var X minut (standard) · "
+            "manuell = laser bara nar du trycker Las nu · "
+            "natt = en gang per dygn vid klockslaget"
         ),
     ),
     _field(
         "EVERY_MINUTES",
-        "Var X minut (lage intervall)",
+        "Las var X minut",
         "Tider",
         kind="float",
-        minimum=1,
+        minimum=0,
         maximum=1440,
+        default="5",
+        only_in_mode="intervall",
+        help=(
+            "0 = hela tiden (nasta lasning startar strax efter den forra) · "
+            "5 = var femte minut. En lasning tar ca en minut."
+        ),
     ),
     _field(
         "RUN_AT",
-        "Klockslag for lasningen",
+        "Klockslag for lasningen (datorns tid)",
         "Tider",
         kind="time",
-        help="Pumpens klocka, inte datorns. Vardet visas strax efter att spolningen startar.",
+        only_in_mode="natt",
+        help=(
+            "Bara i lage natt. Klockslaget ar datorns tid - pumpens klocka gar "
+            "efter (matt ~6 min), sa pumpens 02:00 ar datorns ~02:06. Lasningen "
+            "tittar anda pa displayen tills den visar 02:00."
+        ),
     ),
-    _field("PRE_START_S", "Starta sa har lange innan (s)", "Tider", kind="float", minimum=0, maximum=600),
-    _field("WINDOW_S", "Ge inte upp efter (s)", "Tider", kind="float", minimum=10, maximum=1800),
+    _field(
+        "PRE_START_S",
+        "Starta sa har lange innan (s)",
+        "Tider",
+        kind="float",
+        minimum=0,
+        maximum=600,
+        only_in_mode="natt",
+    ),
+    _field(
+        "WINDOW_S",
+        "Ge inte upp efter (s)",
+        "Tider",
+        kind="float",
+        minimum=10,
+        maximum=1800,
+        only_in_mode="natt",
+    ),
+    _field(
+        "STOP_WHEN_READY",
+        "Sluta sa snart vardet ar fangat",
+        "Tider",
+        kind="bool",
+        default="true",
+        help="Av = las hela fonstret ut, aven efter att vardesidan synts",
+    ),
     _field("INTERVAL_S", "Tid mellan bilderna (s)", "Tider", kind="float", minimum=0.2, maximum=60),
     # --- Displayen -------------------------------------------------------
     _field(
@@ -120,8 +161,9 @@ FIELDS: tuple[Field, ...] = (
         kind="bool",
         default="true",
         help="Av = las hela fonstret ut, aven efter att vardesidan synts",
+        only_in_mode="natt",
     ),
-    _field("SAVE_FRAMES", "Spara bilderna fran varje korning", "Rostningen", kind="bool"),
+    _field("SAVE_FRAMES", "Spara alla bilder fran varje korning", "Rostningen", kind="bool"),
     _field("SAVE_ONLY_SUCCESS", "Spara bara lyckade lasningar", "Rostningen", kind="bool"),
     _field("NOTIFY_ON_FAILURE", "Notis till HA vid misslyckad lasning", "Rostningen", kind="bool"),
     # --- Kameran ---------------------------------------------------------

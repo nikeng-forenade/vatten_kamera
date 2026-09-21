@@ -60,15 +60,15 @@ def test_kanda_lagen_lases_som_de_ar() -> None:
     assert _read_mode("manuell") == "manuell"
 
 
-def test_okant_lage_blir_natt() -> None:
+def test_okant_lage_blir_intervall() -> None:
     # Ett slarvfel i .env ska inte kunna stanga av lasningen helt.
-    assert _read_mode("") == "natt"
-    assert _read_mode("varje-timme") == "natt"
+    assert _read_mode("") == "intervall"
+    assert _read_mode("varje-timme") == "intervall"
 
 
-def test_standardlaget_ar_natt() -> None:
-    assert RunConfig().mode == "natt"
-    assert RunConfig().every_minutes == 10.0
+def test_standardlaget_laser_hela_tiden() -> None:
+    assert RunConfig().mode == "intervall"
+    assert RunConfig().every_minutes == 5.0
 
 
 # --- Nasta korning i granssnittet ----------------------------------------
@@ -151,6 +151,29 @@ def test_intervall_kortare_an_en_minut_tillats_inte() -> None:
 
     nu = datetime(2026, 9, 21, 12, 0, 0)
     assert NightlyRunner.next_interval_start(instans, after=nu) == nu + timedelta(minutes=1)
+
+
+def test_noll_minuter_betyder_hela_tiden() -> None:
+    instans = object.__new__(NightlyRunner)
+    instans.cfg = SimpleNamespace(run=RunConfig(mode="intervall", every_minutes=0))
+
+    nu = datetime(2026, 9, 21, 12, 0, 0)
+    nasta = NightlyRunner.next_interval_start(instans, after=nu)
+    assert timedelta(seconds=1) < nasta - nu < timedelta(minutes=1)
+
+
+def test_granssnittet_visar_hela_tiden_som_en_strax_tid() -> None:
+    senast = datetime.now() - timedelta(minutes=2)
+    nasta = status_server.next_run_at(
+        "02:05:00",
+        0,
+        mode="intervall",
+        every_minutes=0,
+        last_finished=senast.isoformat(timespec="seconds"),
+    )
+
+    assert nasta is not None
+    assert timedelta(seconds=4) <= datetime.fromisoformat(nasta) - senast <= timedelta(seconds=6)
 
 
 def test_schemalagd_korning_hoppar_over_nar_en_annan_laser(

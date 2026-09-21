@@ -46,6 +46,7 @@ import requests
 
 from config import (
     CAPTURES_DIR,
+    INTERVAL_PAUSE_S,
     LATEST_FILE,
     LOG_FILE,
     ROOT,
@@ -117,8 +118,8 @@ def next_run_at(
     run_at: str,
     pre_start_s: float = 0.0,
     *,
-    mode: str = "natt",
-    every_minutes: float = 10.0,
+    mode: str = "intervall",
+    every_minutes: float = 5.0,
     last_finished: str | None = None,
 ) -> str | None:
     """Nar nasta lasning borjar, som ISO-tid.
@@ -136,6 +137,9 @@ def next_run_at(
             sedan = datetime.fromisoformat(last_finished)
         except ValueError:
             return None
+        if every_minutes <= 0:
+            # "Hela tiden": nasta lasning startar strax efter den forra.
+            return (sedan + timedelta(seconds=INTERVAL_PAUSE_S)).isoformat(timespec="seconds")
         target = sedan + timedelta(seconds=max(60.0, every_minutes * 60.0))
         return target.isoformat(timespec="seconds")
 
@@ -421,6 +425,9 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
                 "pid": state.get("pid"),
                 "uppe_s": round(time.time() - float(state.get("boot") or time.time())),
                 "kor": bool(state.get("running")),
+                # Kor den automatiska lasloopen? Granssnittet kan startas ensamt
+                # (main.py status), och da laser ingenting av sig sjalv.
+                "loop": bool(state.get("loop")),
                 "startad": state.get("started"),
                 "senast_klar": state.get("last_finished"),
                 "nasta_korning": next_run_at(
