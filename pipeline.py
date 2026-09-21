@@ -163,6 +163,33 @@ class NightlyRunner:
 
     # --- Kameralage -------------------------------------------------------
 
+    def reload(self) -> bool:
+        """Laser om .env och kalibreringen. True om nagot andrades.
+
+        Installningarna skrivs av granssnittet till samma .env som
+        kommandoraden anvander. I stallet for att krava en omstart av tjansten
+        laser vi om filen mellan korningarna - da slar andrade tider, trosklar,
+        adresser och losenord igenom vid nasta lasning.
+        """
+        try:
+            ny = load_config()
+        except Exception as exc:  # noqa: BLE001 - en trasig .env far inte stoppa tjansten
+            log.error("kunde inte lasa om .env (%s) - kor vidare med de gamla installningarna", exc)
+            return False
+
+        andrat = ny != self.cfg
+        self.cfg = ny
+        self.camera = HikvisionCamera(ny.camera)
+        self.ha = HomeAssistant(ny.ha)
+        self.mqtt = MqttPublisher(ny.mqtt)
+        self.rest = RestPublisher(ny.ha, unit=ny.mqtt.unit)
+        self.calibration = Calibration.load(ny.calibration_file)
+        self.similarity_threshold = ny.run.group_threshold
+        self.use_camera_profile = ny.run.use_camera_profile
+        if andrat:
+            log.info("installningarna har andrats - de galler fran nasta lasning")
+        return andrat
+
     def _stada_bilder(self, *, var_timme: float = 1.0) -> None:
         """Tar bort bilder som ar aldre an KEEP_DAYS.
 
@@ -635,45 +662,63 @@ class NightlyRunner:
         return self.run_once()
 
     def _run_forever(self) -> None:
-        """Kor enligt laget i MODE - natt, intervall eller bara pa begaran."""
-        mode = self.cfg.run.mode
+        """Kor enligt laget i MODE - och byter lage om .env andras.
 
-        if mode == "manuell":
-            # Ingen automatisk lasning alls. Tjansten star kvar och vantar pa att
-            # nagon trycker "Las nu" i granssnittet (eller knappen i HA).
-            log.info(
-                "MODE=manuell - ingen lasning startas automatiskt, tryck 'Las nu' i granssnittet"
-            )
-            set_state(next_run=None, mode=mode)
-            while True:
-                time.sleep(30.0)
-
-        if mode == "intervall":
-            if self.cfg.run.every_minutes <= 0:
-                log.info("MODE=intervall - laser hela tiden (EVERY_MINUTES=0)")
+        Läsläget kan alltsa bytas i granssnittet utan att tjansten startas om:
+        varje varv laser om .env, och andras laget lamnar slingan och en ny
+        borjar.
+        """
+        while True:
+            self.reload()
+            mode = self.cfg.run.mode
+            set_state(mode=mode)
+            if mode == "manuell":
+                self._kor_manuellt()
+            elif mode == "intervall":
+                self._kor_intervall()
             else:
-                log.info(
-                    "MODE=intervall - laser nu och sedan var %.0f minut",
-                    self.cfg.run.every_minutes,
-                )
-            while True:
-                set_state(mode=mode)
-                summary = self.run_once_if_free()
-                if summary is not None:
-                    log.info(
-                        "klar: varde=%s roster=%d konfidens=%.2f fel=%s",
-                        summary.value, summary.votes, summary.confidence, summary.error or "-",
-                    )
-                target = self.next_interval_start()
-                set_state(next_run=target.isoformat(timespec="seconds"))
-                self.wait_until(target)
+                self._kor_natt()
 
-        # MODE=natt: vanta in klockslaget och las tills vardet ar fangat.
+    def _kor_manuellt(self) -> None:
+        """Ingen automatisk lasning - tjansten vantar pa att nagon trycker."""
+        log.info("MODE=manuell - ingen lasning startas automatiskt, tryck 'Las nu' i granssnittet")
+        set_state(next_run=None, mode="manuell")
+        while True:
+            time.sleep(30.0)
+            if self.reload() and self.cfg.run.mode != "manuell":
+                log.info("laslaget har andrats till %s", self.cfg.run.mode)
+                return
+
+    def _kor_intervall(self) -> None:
+        """Laser hela tiden: direkt, och sedan var EVERY_MINUTES minut."""
+        if self.cfg.run.every_minutes <= 0:
+            log.info("MODE=intervall - laser hela tiden (EVERY_MINUTES=0)")
+        else:
+            log.info(
+                "MODE=intervall - laser nu och sedan var %.0f minut", self.cfg.run.every_minutes
+            )
+        while True:
+            set_state(mode="intervall")
+            summary = self.run_once_if_free()
+            if summary is not None:
+                log.info(
+                    "klar: varde=%s roster=%d konfidens=%.2f fel=%s",
+                    summary.value, summary.votes, summary.confidence, summary.error or "-",
+                )
+            target = self.next_interval_start()
+            set_state(next_run=target.isoformat(timespec="seconds"))
+            self.wait_until(target)
+            if self.reload() and self.cfg.run.mode != "intervall":
+                log.info("laslaget har andrats till %s", self.cfg.run.mode)
+                return
+
+    def _kor_natt(self) -> None:
+        """Vantar in klockslaget och laser tills vardet ar fangat."""
         while True:
             target = self.next_run_time()
             start_at = target - timedelta(seconds=self.cfg.run.pre_start_s)
             log.info("nasta korning startar %s", start_at.strftime("%Y-%m-%d %H:%M:%S"))
-            set_state(next_run=start_at.isoformat(timespec="seconds"), mode=mode)
+            set_state(next_run=start_at.isoformat(timespec="seconds"), mode="natt")
 
             self.wait_until(start_at)
             summary = self.run_once_if_free()
@@ -686,6 +731,9 @@ class NightlyRunner:
             # Sov vidare till strax efter att korningen borde vara slut.
             next_target = self.next_run_time()
             self.wait_until(next_target - timedelta(seconds=self.cfg.run.pre_start_s))
+            if self.reload() and self.cfg.run.mode != "natt":
+                log.info("laslaget har andrats till %s", self.cfg.run.mode)
+                return
 
 
 def page_kind(reading: Reading) -> str:

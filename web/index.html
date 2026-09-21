@@ -81,6 +81,12 @@
   .graf-bild { flex: 0 1 320px; margin: 0; }
   .graf-bild img { width: 100%; border-radius: 8px; border: 1px solid #2a2f3a; }
   .graf-bild figcaption { font-size: .78rem; color: var(--dim); margin-top: 6px; }
+
+  /* Kamerans lage och dess knappar. */
+  .kamera-lage { font-size: .8rem; color: var(--dim); margin-top: 8px; line-height: 1.5; }
+  .kamera-lage b { color: var(--text, #e6e6e6); }
+  .kamera-knappar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .kamera-knappar button { font-size: .78rem; padding: 5px 9px; }
   .live-toggle { display: flex; align-items: center; gap: 6px; font-size: .82rem; color: var(--dim);
                  margin-left: auto; cursor: pointer; user-select: none; }
   .live-toggle input { accent-color: var(--green); }
@@ -136,6 +142,17 @@
     <div class="card">
       <h3>📷 Kameran</h3>
       <div class="state" id="state-camera">inte testad</div>
+      <div class="kamera-lage" id="kameraLage">hämtar kamerans läge…</div>
+      <div class="kamera-knappar">
+        <button data-camera="lasning" title="Lägger på den sparade läsprofilen">Dagsläge för läsning</button>
+        <button data-camera="natt" title="Kamerans eget nattläge">Nattläge</button>
+        <button data-camera="spara_profil" title="Sparar kamerans nuvarande läge som läsprofil">Spara som läsprofil</button>
+        <button data-camera="rensa_profil">Töm läsprofilen</button>
+        <button data-camera="backa_upp" title="Sparar kamerans utgångsläge (skrivs aldrig över)">Backa upp</button>
+        <button data-camera="aterstall" title="Lägger tillbaka utgångsläget">Återställ</button>
+        <button data-camera="las_om">Läs om</button>
+      </div>
+      <div class="hint" id="kameraText"></div>
       <button data-test="camera">Testa kameran</button>
     </div>
     <div class="card">
@@ -170,7 +187,8 @@
     <form id="form"></form>
     <div class="actions" style="margin:16px 0 0">
       <button class="primary" id="save">Spara</button>
-      <span class="hint">Sparas i <code>.env</code> — samma fil som kommandoraden använder.</span>
+      <span class="hint">Sparas i <code>.env</code> — samma fil som kommandoraden använder.
+        Ändringarna gäller från nästa läsning; bara porten för gränssnittet kräver omstart.</span>
     </div>
     <div id="saveMsg" class="hint"></div>
   </section>
@@ -324,7 +342,8 @@ function ritaGraf(punkter) {
       : '— inga läsningar i perioden';
     return;
   }
-  $('grafInfo').textContent = `${giltiga.length} läsningar`;
+  $('grafInfo').textContent = `${giltiga.length} läsningar` +
+    (punkter.length > giltiga.length ? ` · ${punkter.length - giltiga.length} utan värde` : '');
 
   const tider = punkter.map((p) => new Date(p.tid).getTime()).filter((t) => !isNaN(t));
   const varden = giltiga.map((p) => p.varde);
@@ -360,9 +379,9 @@ function ritaGraf(punkter) {
   const sorterade = punkter
     .filter((p) => typeof p.varde === 'number' && !isNaN(new Date(p.tid).getTime()))
     .sort((a, b) => new Date(a.tid) - new Date(b.tid));
-  let bit: string[] = [];
-  let forra: number | null = null;
-  const bitar: string[] = [];
+  let bit = [];
+  let forra = null;
+  const bitar = [];
   sorterade.forEach((p) => {
     const t = new Date(p.tid).getTime();
     if (forra !== null && t - forra > LUCKA_MS && bit.length) {
@@ -375,12 +394,19 @@ function ritaGraf(punkter) {
   if (bit.length > 1) bitar.push(bit.join(' '));
   bitar.forEach((pts) => delar.push(`<polyline class="linje" points="${pts}"></polyline>`));
 
+  // Punkter utan varde (misslyckad lasning) ritas langst ned, sa att aven de syns.
   punkter.forEach((p, i) => {
-    if (typeof p.varde !== 'number' || isNaN(new Date(p.tid))) return;
+    const t = new Date(p.tid).getTime();
+    if (isNaN(t)) return;
+    const utanVarde = typeof p.varde !== 'number';
+    const v = utanVarde ? vMin : p.varde;
     const klass = i === grafVald ? 'punkt vald' : (p.ok ? 'punkt' : 'punkt misslyckad');
+    const titel = utanVarde
+      ? `Ingen lasning ${String(p.tid).replace('T', ' ')}`
+      : `${p.visas_som || p.varde} · ${String(p.tid).replace('T', ' ')}`;
     delar.push(
-      `<circle class="${klass}" data-i="${i}" cx="${x(new Date(p.tid).getTime())}" cy="${y(p.varde)}" r="4">` +
-      `<title>${p.visas_som || p.varde} · ${String(p.tid).replace('T', ' ')}</title></circle>`
+      `<circle class="${klass}" data-i="${i}" cx="${x(t)}" cy="${y(v)}" r="${utanVarde ? 3 : 4}">` +
+      `<title>${titel}</title></circle>`
     );
   });
   svg.innerHTML = delar.join('');
@@ -422,6 +448,57 @@ async function runTest(what, button) {
     target.after(img);
   }
   button.disabled = false;
+}
+
+// --- Kameran: laget hos kameran sjalv, och lasprofilen -----------------------
+
+const KAMERA_ETIKETTER = {
+  ircut: 'dagsläge/nattläge',
+  exposure_type: 'exponering',
+  gain: 'gain',
+  shutter: 'slutare',
+  sharpness: 'skärpa',
+  brightness: 'ljusstyrka',
+  contrast: 'kontrast',
+  saturation: 'mättnad',
+  wdr_mode: 'WDR',
+  wdr_level: 'WDR-nivå',
+  noise_reduce: 'brusreducering',
+  noise_reduce_level: 'brusnivå',
+  overexpose_suppress: 'överexponeringsskydd',
+};
+
+function beskrivLage(values, profile) {
+  const nu = Object.entries(values || {})
+    .map(([key, value]) => `${KAMERA_ETIKETTER[key] || key} <b>${value}</b>`)
+    .join(' · ');
+  const profil = Object.keys(profile || {}).length
+    ? Object.entries(profile)
+        .map(([key, value]) => `${KAMERA_ETIKETTER[key] || key}=${value}`)
+        .join(', ')
+    : '';
+  return (nu ? `<div>${nu}</div>` : '')
+    + (profil ? `<div>läsprofil sparad: ${profil}</div>` : '<div>ingen läsprofil sparad</div>');
+}
+
+async function refreshCamera() {
+  const data = await api('/api/camera');
+  if (!data.ok) {
+    $('kameraLage').textContent = data.text || 'kunde inte läsa kameran';
+    return data;
+  }
+  $('kameraLage').innerHTML = beskrivLage(data.values, data.profile)
+    + (data.har_backup ? '<div>utgångsläget är backat upp</div>' : '<div>ingen backup på kamerans utgångsläge</div>');
+  return data;
+}
+
+async function cameraAction(action, button) {
+  if (button) button.disabled = true;
+  const data = await api('/api/camera', { action });
+  $('kameraText').textContent = data.text || '';
+  $('kameraText').className = 'hint ' + (data.ok ? 'ok' : 'fel');
+  await refreshCamera();
+  if (button) button.disabled = false;
 }
 
 function fieldInput(field) {
@@ -559,11 +636,14 @@ async function save() {
 
   $('saveMsg').textContent = result.text || 'sparat';
   $('saveMsg').className = 'hint ok';
-  if ((result.andrade || []).length) {
+  // Bara porten och av/pa-knapparna kraver en omstart - resten laser tjansten om
+  // mellan korningarna. Sa slipper man starta om for att andra en troskel.
+  if ((result.omstart_kravs || []).length) {
     const restart = await api('/api/restart', {});
     $('saveMsg').textContent += restart.text ? ` — ${restart.text}` : '';
   }
   await loadConfig();
+  await refreshStatus();
 }
 
 $('run').addEventListener('click', async () => {
@@ -583,6 +663,10 @@ $('save').addEventListener('click', save);
 
 document.querySelectorAll('button[data-test]').forEach((button) => {
   button.addEventListener('click', () => runTest(button.dataset.test, button));
+});
+
+document.querySelectorAll('button[data-camera]').forEach((button) => {
+  button.addEventListener('click', () => cameraAction(button.dataset.camera, button));
 });
 
 $('liveToggle').addEventListener('change', (event) => {
@@ -615,9 +699,11 @@ $('grafPeriod').addEventListener('change', () => {
   await refreshStatus();
   await refreshLog();
   await refreshGraph();
+  refreshCamera();
   setInterval(() => { if (live) refreshStatus(); }, 5000);
   setInterval(() => { if (live) refreshLog(); }, 20000);
   setInterval(() => { if (live) refreshGraph(); }, 15000);
+  setInterval(() => { if (live) refreshCamera(); }, 60000);
 })();
 </script>
 </body>

@@ -49,6 +49,11 @@ class HikvisionCamera:
         self.cfg = cfg
         self._session = requests.Session()
         self._session.auth = HTTPBasicAuth(cfg.user, cfg.password)
+        if not cfg.ip:
+            raise CameraError(
+                "kamerans adress saknas - fyll i CAMERA_IP i .env, "
+                "eller under Installningar i webbgranssnittet"
+            )
 
     def device_info(self) -> str:
         """Returnerar kamerans deviceInfo-XML. Kastar CameraError vid fel."""

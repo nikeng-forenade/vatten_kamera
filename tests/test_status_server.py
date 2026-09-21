@@ -240,7 +240,33 @@ def test_nasta_korning_ar_framat_i_tiden() -> None:
     assert datetime.fromisoformat(tid) > datetime.now()
 
 
-def test_health_sager_vad_granssnittet_far_gora(server: StatusServer, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sparade_installningar_sager_om_omstart_behovs(
+    server: StatusServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Sparar man en troskel ska svaret saga att det galler direkt - inte be om
+    en omstart (som i en LXC startar om hela tjansten)."""
+    import settings_store
+
+    env = tmp_path / ".env"
+    env.write_text("THRESHOLD=250\nSTATUS_PORT=8099\n", encoding="utf-8")
+    monkeypatch.setattr(settings_store, "ENV_FILE", env)
+
+    status, data = hamta(server, "/api/config", {"THRESHOLD": "240"})
+    assert status == 200
+    assert data["andrade"] == ["THRESHOLD"]
+    assert data["omstart_kravs"] == []
+    assert "nasta lasning" in data["text"]
+    assert env.read_text(encoding="utf-8").splitlines()[0] == "THRESHOLD=240"
+
+    status, data = hamta(server, "/api/config", {"STATUS_PORT": "9000"})
+    assert status == 200
+    assert data["omstart_kravs"] == ["STATUS_PORT"]
+    assert "startas om" in data["text"]
+
+
+def test_health_sager_vad_granssnittet_far_gora(
+    server: StatusServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Testet satter flaggorna sjalv, sa att det inte beror pa vad som star i
     # .env pa maskinen som kor testerna.
     monkeypatch.setattr(status_server, "STATUS_LIVE", True)

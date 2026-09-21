@@ -206,8 +206,10 @@ Värdet står stilla tills spolningen ändrar det, så **en läsning var femte m
 för att se när det händer — och då är värdet som mest fem minuter gammalt i Home
 Assistant. Vill du ha det direkt: sätt `EVERY_MINUTES=1`.
 
-Läget ändras i webbgränssnittet (under **Tider**) eller direkt i `.env`. Tjänsten måste
-startas om efteråt — knappen gör det åt dig.
+Läget ändras i webbgränssnittet (under **Tider**) eller direkt i `.env`. **Ändringarna
+slår igenom vid nästa läsning** — tjänsten läser om `.env` mellan körningarna, så du
+behöver inte starta om den för att byta läge, tröskel eller adress. Bara gränssnittets
+egen port och av/på-knapparna kräver en omstart.
 
 Kommer en schemalagd läsning medan en annan pågår hoppar den över den gången, i stället
 för att två läsningar slåss om kameran.
@@ -339,6 +341,34 @@ run.cmd tools/import_history.py
 `history.jsonl` håller de senaste 5 000 läsningarna. I Home Assistant behövs ingen egen
 historik: sensorn `sensor.vatten_kamera_niva` loggas av HA:s egen recorder, och
 tidsstämpeln i `sensor.vatten_kamera_senast_last` visar när värdet är från.
+
+## Kamerans uppgifter ligger bara hos dig
+
+Repot innehåller **inga** kamerauppgifter: ingen adress, inget användarnamn, inget
+lösenord, ingen kalibrering och ingen läsprofil. Allt sådant ligger i `.env`,
+`calibration.json`, `camera_profile.json` och `camera_settings_backup.json` — som alla är
+gitignorerade. Det går att kontrollera själv:
+
+```powershell
+git grep -n -I -e "CAMERA_PASSWORD" -- .     # ska inte ge något
+git status --short                          # .env och *.json ska inte synas
+```
+
+Kamerans **inställningar** (ljussättning, gain, slutare, WDR …) finns i kameran själv och i
+`camera_profile.json` — aldrig i koden. De sköts i webbgränssnittets **kamerakort**:
+
+| Knapp | Vad den gör |
+|---|---|
+| **Dagsläge för läsning** | Lägger på den sparade läsprofilen (det ljusare läget siffrorna behöver) |
+| **Nattläge** | Kamerans eget nattläge (`ircut=night`, automatisk exponering) |
+| **Spara som läsprofil** | Sparar kamerans nuvarande läge som läsprofil — lokalt |
+| **Töm läsprofilen** | Tar bort profilen (kameran lämnas som den är) |
+| **Backa upp** / **Återställ** | Sparar respektive lägger tillbaka kamerans utgångsläge |
+| **Läs om** | Hämtar kamerans läge igen |
+
+Kortet visar också vilket läge kameran står i just nu och vilken läsprofil som är sparad.
+**Läsläget lämnar kameran ljusare** — tryck *Nattläge* när du är klar, annars ser andra
+kameran i dagsläge.
 
 ## Kamerans bildinställningar
 

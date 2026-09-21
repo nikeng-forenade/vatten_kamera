@@ -4,9 +4,9 @@
 # Kor pa Proxmox-hostens skal:
 #   bash -c "$(wget -qLO - https://raw.githubusercontent.com/nikeng-forenade/vatten_kamera/main/lxc/proxmox-create.sh)"
 #
-# Eller med allt ifyllt:
-#   bash proxmox-create.sh 210 local-lvm vmbr0 192.168.1.60/24 192.168.1.1 \
-#     --run-at 02:05:00 --camera-ip 192.168.1.213 --camera-password hemligt --unit l
+# Eller med allt ifyllt (byta ut adresserna mot dina egna):
+#   bash proxmox-create.sh 210 local-lvm vmbr0 <containerns-ip>/24 <gateway> \
+#     --camera-ip <kamerans adress> --camera-password hemligt --unit l
 #
 # Containern ar huvudlos: ingen skarm, inget skrivbord. Lasningen skots av en
 # systemtjanst, och allt styrs och foljs i webblasaren pa http://<ip>:8099/.
@@ -98,8 +98,8 @@ if [[ ${#POS_ARGS[@]} -eq 0 ]] && [[ -z "$INSTALL_OPTS" ]]; then
     if [[ "$IP" != "dhcp" ]]; then
       read -r -p "  Gateway: " input; GATEWAY="${input:-}"
     fi
-    read -r -p "  Kamerans adress [192.168.1.213]: " input
-    INSTALL_OPTS="$INSTALL_OPTS --camera-ip ${input:-192.168.1.213}"
+    read -r -p "  Kamerans adress: " input
+    INSTALL_OPTS="$INSTALL_OPTS --camera-ip ${input}"
     read -r -p "  Kamerans losenord: " input
     [[ -n "$input" ]] && INSTALL_OPTS="$INSTALL_OPTS --camera-password $input"
     read -r -p "  Klockslag for lasningen [02:05:00]: " input

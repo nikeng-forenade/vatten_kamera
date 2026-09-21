@@ -10,13 +10,23 @@ from pathlib import Path
 
 import pytest
 
-from settings_store import BY_KEY, Field, apply_changes, current, normalize, read_env, write_env
+from settings_store import (
+    BY_KEY,
+    RESTART_KEYS,
+    Field,
+    apply_changes,
+    current,
+    normalize,
+    read_env,
+    restart_required,
+    write_env,
+)
 
 ENV = """# En kommentar overst
 RUN_AT=02:05:00
 
 # Kameran
-CAMERA_IP=192.168.1.213
+CAMERA_IP=10.0.0.5
 CAMERA_PASSWORD=hemligt
 
 HA_TOKEN=tokentoken
@@ -66,7 +76,7 @@ def test_skriver_bara_den_andrade_raden(tmp_path: Path) -> None:
     assert "RUN_AT=02:00:00" in text
     assert "# En kommentar overst" in text
     assert "# Kameran" in text
-    assert "CAMERA_IP=192.168.1.213" in text
+    assert "CAMERA_IP=10.0.0.5" in text
     assert "CAMERA_PASSWORD=hemligt" in text
 
 
@@ -103,7 +113,7 @@ def test_godkanda_varden(key: str, raw: str, expected: str) -> None:
         ("MIN_AGREEMENT", "manga"),
         ("MIN_CONFIDENCE", "1.5"),
         ("COLOR_CHANNEL", "lila"),
-        ("CAMERA_IP", "192.168.1.213\nRM -RF"),
+        ("CAMERA_IP", "10.0.0.5\nRM -RF"),
     ],
 )
 def test_avvisar_oanvandbara_varden(key: str, raw: str) -> None:
@@ -156,3 +166,29 @@ def test_alla_falt_har_unik_nyckel() -> None:
     nycklar = [item.key for item in BY_KEY.values()]
     assert len(nycklar) == len(set(nycklar))
     assert all(isinstance(item, Field) for item in BY_KEY.values())
+
+
+def test_bara_granssnittets_egna_falt_kraver_omstart() -> None:
+    """Allt annat slar igenom vid nasta lasning - tjansten laser om .env sjalv."""
+    vanliga = restart_required({"THRESHOLD": "240", "EVERY_MINUTES": "10", "MODE": "manuell"})
+    assert vanliga == []
+
+    krangliga = restart_required({"STATUS_PORT": "8099", "THRESHOLD": "240"})
+    assert krangliga == ["STATUS_PORT"]
+
+
+def test_omstart_nycklarna_finns_bland_falten() -> None:
+    """En nyckel som inte ar ett falt kan heller inte andras - da ar listan fel."""
+    for key in RESTART_KEYS:
+        assert key in BY_KEY, f"{key} finns inte bland installningarna"
+
+
+def test_omstart_nycklarna_ar_granssnittets_egna() -> None:
+    # Bara granssnittets egen port, adress och av/pa-knappar kraver en omstart.
+    assert RESTART_KEYS == {
+        "STATUS_PORT",
+        "STATUS_BIND",
+        "STATUS_LIVE",
+        "STATUS_ALLOW_RUN",
+        "STATUS_ALLOW_RESTART",
+    }

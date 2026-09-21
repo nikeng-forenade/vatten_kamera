@@ -45,6 +45,8 @@ def fejkad_summary() -> RunSummary:
 def runner(monkeypatch: pytest.MonkeyPatch, **run: object) -> NightlyRunner:
     """En korning utan kamera: bara tiderna och laget ar intressanta."""
     monkeypatch.setattr(NightlyRunner, "__init__", lambda self, cfg, **kw: None)
+    # reload skulle lasa den riktiga .env och byta lage mitt i testet.
+    monkeypatch.setattr(NightlyRunner, "reload", lambda self: False)
     cfg = SimpleNamespace(run=RunConfig(**run))
     instans = NightlyRunner(cfg)
     instans.cfg = cfg
@@ -201,3 +203,53 @@ def test_schemalagd_korning_kor_nar_ingen_annan_ar_i_gang(
 
     assert summary is not None
     assert summary.value == "058"
+
+
+# --- Andrade installningar utan omstart ----------------------------------
+
+
+def test_tjansten_laser_om_env_mellan_korningarna(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sparar man i granssnittet ska det sla igenom utan att tjansten startas om."""
+    from dataclasses import replace
+
+    import config as config_mod
+
+    grund = config_mod.load_config()
+    ny = replace(grund, run=replace(grund.run, mode="manuell", every_minutes=1))
+
+    instans = NightlyRunner.__new__(NightlyRunner)
+    instans.cfg = grund
+    instans.similarity_threshold = 8.0
+    instans.use_camera_profile = False
+    instans.camera = instans.ha = instans.mqtt = instans.rest = None
+    instans.calibration = None
+
+    monkeypatch.setattr(pipeline, "load_config", lambda: ny)
+    # Klienterna byggs om av reload - de behover inte kunna na nagot.
+    monkeypatch.setattr(pipeline, "HikvisionCamera", lambda cfg: "kamera")
+    monkeypatch.setattr(pipeline, "HomeAssistant", lambda cfg: "ha")
+    monkeypatch.setattr(pipeline, "MqttPublisher", lambda cfg: "mqtt")
+    monkeypatch.setattr(pipeline, "RestPublisher", lambda ha, unit: "rest")
+    monkeypatch.setattr(pipeline.Calibration, "load", lambda path: "kalibrering")
+
+    assert instans.reload() is True
+    assert instans.cfg is ny
+    assert instans.cfg.run.mode == "manuell"
+    assert instans.camera == "kamera"
+    assert instans.calibration == "kalibrering"
+
+
+def test_trasig_env_stoppar_inte_tjansten(monkeypatch: pytest.MonkeyPatch) -> None:
+    import config as config_mod
+
+    grund = config_mod.load_config()
+    instans = NightlyRunner.__new__(NightlyRunner)
+    instans.cfg = grund
+
+    def spräng() -> None:
+        raise ValueError("nagot ar fel i .env")
+
+    monkeypatch.setattr(pipeline, "load_config", spräng)
+
+    assert instans.reload() is False
+    assert instans.cfg is grund  # de gamla installningarna galler vidare

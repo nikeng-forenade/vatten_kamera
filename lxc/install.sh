@@ -3,7 +3,7 @@
 #
 # Kors inuti containern, som root:
 #   bash install.sh
-#   bash install.sh --run-at 02:05:00 --camera-ip 192.168.1.213 --camera-password hemligt
+#   bash install.sh --camera-ip <kamerans adress> --camera-password hemligt
 #
 # Skriptet ar gjort for att kunna koras om: koden uppdateras, .env och data
 # lamnas i fred.
@@ -18,8 +18,8 @@ SERVICE="vatten-kamera"
 RUN_AT="02:05:00"
 MODE="intervall"
 EVERY_MINUTES="5"
-CAMERA_IP="192.168.1.213"
-CAMERA_USER="admin"
+CAMERA_IP=""
+CAMERA_USER=""
 CAMERA_PASSWORD=""
 HA_URL=""
 HA_TOKEN=""
@@ -34,8 +34,8 @@ Anvandning: bash install.sh [flaggor]
   --run-at HH:MM:SS        Klockslaget da vardet visas (DATORNS tid - pumpens klocka gar efter)
   --mode intervall|manuell|natt   Nar den ska lasa (standard intervall)
   --every-minutes X        Hur ofta i lage intervall (0 = hela tiden, standard 5)
-  --camera-ip IP           Kamerans adress (standard 192.168.1.213)
-  --camera-user NAMN       Kamerans anvandare (standard admin)
+  --camera-ip IP           Kamerans adress (kan ocksa fyllas i i granssnittet)
+  --camera-user NAMN       Kamerans anvandare (t.ex. admin)
   --camera-password LOSEN  Kamerans losenord
   --ha-url URL             Home Assistant-adress
   --ha-token TOKEN         Langlivad token

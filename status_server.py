@@ -8,6 +8,7 @@ och en enda HTML-fil.
                           installningar (samma .env som kommandoraden laser)
     /api/latest           senaste lasningen som JSON
     /api/history          alla lasningar (underlaget for grafen)
+    /api/camera           kamerans installningar (las/lage)
     /api/health           lever tjansten, och nar kor nasta lasning
     /api/config           installningarna (hemliga varden lamnas aldrig ut)
     /api/run              en lasning direkt
@@ -286,6 +287,120 @@ def test_mqtt() -> dict[str, Any]:
     return {"ok": True, "text": f"ansluten till {cfg.mqtt.host}:{cfg.mqtt.port} pa {elapsed:.0f} ms"}
 
 
+def camera_status() -> dict[str, Any]:
+    """Kamerans installningar just nu, och om det finns en lasprofil.
+
+    Allt kameralage ligger hos kameran sjalv och i `camera_profile.json` -
+    aldrig i koden. Granssnittet visar bara vad kameran svarar.
+    """
+    from camera_settings import (
+        BACKUP_FILE,
+        PROFILE_FILE,
+        CameraSettings,
+        CameraSettingsError,
+    )
+    from config import load_config
+
+    cfg = load_config()
+    if not cfg.camera.ip:
+        return {
+            "ok": False,
+            "text": "kamerans adress saknas - fyll i den under Installningar nedan",
+            "har_profil": PROFILE_FILE.exists(),
+            "har_backup": BACKUP_FILE.exists(),
+        }
+
+    kamera = CameraSettings(cfg.camera)
+    try:
+        values = kamera.read()
+    except CameraSettingsError as exc:
+        return {"ok": False, "text": str(exc), "adress": cfg.camera.base_url}
+
+    return {
+        "ok": True,
+        "adress": cfg.camera.base_url,
+        "values": values,
+        "profile": kamera.load_profile() or {},
+        "har_profil": PROFILE_FILE.exists(),
+        "har_backup": BACKUP_FILE.exists(),
+        "roi": ",".join(str(part) for part in cfg.calibration_roi) if cfg.calibration_roi else "",
+        "laser_med_profil": cfg.run.use_camera_profile,
+    }
+
+
+def camera_action(action: str, values: dict[str, str] | None = None) -> dict[str, Any]:
+    """Gor nagot med kameran: byt lage, spara lasprofil, backa upp eller aterstall.
+
+    "lasning" lagger pa den sparade lasprofilen (det ljusare laget siffrorna
+    behover), "natt" ger tillbaka kamerans eget nattlage.
+    """
+    from camera_settings import PROFILE_FILE, CameraSettings, CameraSettingsError
+    from config import load_config
+
+    cfg = load_config()
+    if not cfg.camera.ip:
+        return {"ok": False, "text": "kamerans adress saknas - fyll i den forst"}
+
+    kamera = CameraSettings(cfg.camera)
+    try:
+        if action == "las_om":
+            kamera.read()
+            return {"ok": True, "text": "kamerans installningar lasta", "values": kamera.values}
+
+        if action == "lasning":
+            profil = kamera.load_profile()
+            if not profil:
+                return {
+                    "ok": False,
+                    "text": "ingen lasprofil sparad - stall in laget du vill ha och tryck "
+                    "'Spara som lasprofil'",
+                }
+            values_changed = kamera.apply(profil)
+            return {"ok": True, "text": "kameran ar i laslaget", "values": values_changed}
+
+        if action == "natt":
+            values_changed = kamera.apply({"ircut": "night", "exposure_type": "auto"})
+            return {
+                "ok": True,
+                "text": "kameran ar tillbaka i sitt eget nattlage",
+                "values": values_changed,
+            }
+
+        if action == "spara_profil":
+            if not kamera.xml:
+                kamera.read()
+            path = kamera.save_profile()
+            return {
+                "ok": True,
+                "text": f"lasprofilen sparad ({path.name}) - den anvands vid varje lasning",
+                "profile": kamera.load_profile() or {},
+            }
+
+        if action == "rensa_profil":
+            if PROFILE_FILE.exists():
+                PROFILE_FILE.unlink()
+                return {"ok": True, "text": "lasprofilen borttagen - kameran lamnas som den ar"}
+            return {"ok": True, "text": "det fanns ingen lasprofil"}
+
+        if action == "backa_upp":
+            kamera.backup()  # skriver aldrig over en befintlig backup
+            return {"ok": True, "text": "kamerans utgangslage finns i backupen"}
+
+        if action == "aterstall":
+            values_changed = kamera.restore()
+            return {"ok": True, "text": "kameran aterstalld fran backupen", "values": values_changed}
+
+        if action == "set":
+            if not values:
+                return {"ok": False, "text": "inga installningar skickades med"}
+            values_changed = kamera.apply(values)
+            return {"ok": True, "text": "kamerans installningar andrade", "values": values_changed}
+
+        return {"ok": False, "text": f"okand atgard: {action}"}
+    except CameraSettingsError as exc:
+        return {"ok": False, "text": str(exc)}
+
+
 def start_run() -> dict[str, Any]:
     """Startar en lasning i bakgrunden - den tar en dryg minut."""
     if get_state().get("running"):
@@ -391,6 +506,13 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
             if path in {"/api/test/camera", "/api/test/ha", "/api/test/mqtt"}:
                 self._send_json(self._test(path.rsplit("/", 1)[-1]))
                 return
+            if path == "/api/camera":
+                try:
+                    self._send_json(camera_status())
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("kameravagen kraschade")
+                    self._send_json({"ok": False, "text": f"kunde inte lasa kameran: {exc}"})
+                return
 
             self._send_json({"ok": False, "error": f"okand vag {path}"}, status=404)
 
@@ -400,17 +522,37 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
             payload = self._read_json()
 
             if path == "/api/config":
-                from settings_store import apply_changes
+                from settings_store import apply_changes, restart_required
 
                 changed, problems = apply_changes(payload)
                 if problems:
                     self._send_json({"ok": False, "fel": problems}, status=400)
                     return
-                if changed:
-                    text = f"{len(changed)} installning(ar) sparade - starta om tjansten"
-                else:
+
+                # Nastan allt slar igenom vid nasta lasning: tjansten laser om
+                # .env mellan korningarna. Bara granssnittets egen port och
+                # av/på-knapparna kraver en omstart.
+                omstart = restart_required(changed)
+                if not changed:
                     text = "inga andringar"
-                self._send_json({"ok": True, "text": text, "andrade": sorted(changed)})
+                elif omstart:
+                    text = (
+                        f"{len(changed)} installning(ar) sparade - "
+                        f"{', '.join(omstart)} kraver att tjansten startas om"
+                    )
+                else:
+                    text = (
+                        f"{len(changed)} installning(ar) sparade - "
+                        "de galler fran nasta lasning"
+                    )
+                self._send_json(
+                    {
+                        "ok": True,
+                        "text": text,
+                        "andrade": sorted(changed),
+                        "omstart_kravs": omstart,
+                    }
+                )
                 return
 
             if path == "/api/run":
@@ -431,6 +573,18 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
                     )
                     return
                 self._send_json(restart_service())
+                return
+
+            if path == "/api/camera":
+                # Kamerans lage andras pa samma villkor som en lasning direkt:
+                # den som far starta en lasning far ocksa rora kameran.
+                if not (allow_read and STATUS_ALLOW_RUN):
+                    self._send_json(
+                        {"ok": False, "text": "andringar av kameran ar avstangda (STATUS_ALLOW_RUN)"},
+                        status=403,
+                    )
+                    return
+                self._send_json(camera_action(str(payload.get("action") or ""), payload.get("values")))
                 return
 
             self._send_json({"ok": False, "error": f"okand vag {path}"}, status=404)

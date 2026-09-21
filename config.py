@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 
 ROOT = Path(__file__).resolve().parent
 
@@ -250,8 +250,11 @@ class Config:
 
 def load_config() -> Config:
     camera = CameraConfig(
-        ip=_get("CAMERA_IP", "192.168.1.213"),
-        user=_get("CAMERA_USER", "admin"),
+        # Kamerans adress, anvandare och losenord star bara i .env (som ar
+        # gitignorerad). Har finns inga varden alls - sa kan inget kamerahus
+        # hamna i repot.
+        ip=_get("CAMERA_IP"),
+        user=_get("CAMERA_USER"),
         password=_get("CAMERA_PASSWORD"),
         http_port=_get_int("CAMERA_HTTP_PORT", 80),
         rtsp_port=_get_int("CAMERA_RTSP_PORT", 554),

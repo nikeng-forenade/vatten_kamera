@@ -176,9 +176,18 @@ FIELDS: tuple[Field, ...] = (
     _field("SAVE_ONLY_SUCCESS", "Spara bara lyckade lasningar", "Rostningen", kind="bool"),
     _field("NOTIFY_ON_FAILURE", "Notis till HA vid misslyckad lasning", "Rostningen", kind="bool"),
     # --- Kameran ---------------------------------------------------------
-    _field("CAMERA_IP", "Kamerans adress", "Kameran"),
+    # Kamerans adress, anvandare och losenord finns BARA i .env (gitignorerad)
+    # och skrivs harifran - aldrig i koden.
+    _field(
+        "CAMERA_IP",
+        "Kamerans adress",
+        "Kameran",
+        help="Sparas bara i .env pa den har maskinen - den ligger aldrig i koden",
+    ),
     _field("CAMERA_USER", "Anvandare", "Kameran"),
     _field("CAMERA_PASSWORD", "Losenord", "Kameran", kind="secret", keep_if_empty=True),
+    _field("CAMERA_HTTP_PORT", "Port (ISAPI)", "Kameran", kind="int", minimum=1, maximum=65535, default="80"),
+    _field("CAMERA_CHANNEL", "Strom", "Kameran", default="101", help="101 = huvudstrom, 102 = subström"),
     _field("USE_CAMERA_PROFILE", "Lana kameran till lasprofilen", "Kameran", kind="bool"),
     # --- Home Assistant --------------------------------------------------
     _field("HA_BASE_URL", "Adress", "Home Assistant", help="T.ex. http://homeassistant.local:8123"),
@@ -228,11 +237,39 @@ FIELDS: tuple[Field, ...] = (
 
 BY_KEY: dict[str, Field] = {item.key: item for item in FIELDS}
 
+# De installningar som INTE kan sla igenom utan omstart: de satts nar
+# granssnittets HTTP-server startas (port och adress) eller lastes en gang nar
+# den byggdes. Allt annat laser tjansten om mellan korningarna.
+RESTART_KEYS = frozenset(
+    {
+        "STATUS_PORT",
+        "STATUS_BIND",
+        "STATUS_LIVE",
+        "STATUS_ALLOW_RUN",
+        "STATUS_ALLOW_RESTART",
+    }
+)
+
+
+def restart_required(changed: dict[str, str]) -> list[str]:
+    """Vilka av de andrade nycklarna som kraver att tjansten startas om."""
+    return sorted(key for key in changed if key in RESTART_KEYS)
+
 _TIME = re.compile(r"^([01]?\d|2[0-3]):([0-5]?\d)(:([0-5]?\d))?$")
 
 
-def read_env(path: Path = ENV_FILE) -> dict[str, str]:
+def _fil(path: Path | None) -> Path:
+    """Vilken .env som avses.
+
+    Las vid anropet och inte nar modulen laddas, sa att ett test - eller en
+    DATA_DIR nagon annanstans - kan peka ut en annan fil.
+    """
+    return path if path is not None else ENV_FILE
+
+
+def read_env(path: Path | None = None) -> dict[str, str]:
     """Laser .env som en vanlig nyckel/varde-tabell."""
+    path = _fil(path)
     values: dict[str, str] = {}
     if not path.exists():
         return values
@@ -245,7 +282,7 @@ def read_env(path: Path = ENV_FILE) -> dict[str, str]:
     return values
 
 
-def current(path: Path = ENV_FILE) -> list[dict]:
+def current(path: Path | None = None) -> list[dict]:
     """Alla falt med vardena som galler just nu (hemliga utan varde).
 
     Saknas nyckeln i .env visas standardvardet, sa att granssnittet aldrig
@@ -306,8 +343,9 @@ def normalize(item: Field, raw: str, *, existing: str = "") -> str | None:
     return text
 
 
-def apply_changes(updates: dict[str, str], path: Path = ENV_FILE) -> tuple[dict[str, str], dict[str, str]]:
+def apply_changes(updates: dict[str, str], path: Path | None = None) -> tuple[dict[str, str], dict[str, str]]:
     """Skriver andringarna i .env. Returnerar (andrade, fel)."""
+    path = _fil(path)
     values = read_env(path)
     changed: dict[str, str] = {}
     problems: dict[str, str] = {}
@@ -335,8 +373,9 @@ def apply_changes(updates: dict[str, str], path: Path = ENV_FILE) -> tuple[dict[
     return changed, problems
 
 
-def write_env(values: dict[str, str], changed: dict[str, str], path: Path = ENV_FILE) -> None:
+def write_env(values: dict[str, str], changed: dict[str, str], path: Path | None = None) -> None:
     """Skriver tillbaka .env: bara andrade rader byts, resten star kvar."""
+    path = _fil(path)
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     seen: set[str] = set()
     out: list[str] = []
