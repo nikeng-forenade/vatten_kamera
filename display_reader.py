@@ -1129,13 +1129,13 @@ def group_similar(crops: list[np.ndarray], threshold: float = 8.0) -> list[list[
     """Delar in bilderna i grupper dar gruppens bilder visar samma sak.
 
     Bilderna jamfors med den senaste gruppens medelvarde. Nar displayen byter
-    varde blir skillnaden stor och en ny grupp startas. Pa sa vis blandas aldrig
-    tva olika varden ihop.
+    sida blir skillnaden stor och en ny grupp startas. Pa sa vis blandas aldrig
+    tva olika sidor ihop.
 
     Jamforelsen gors pa utjamnade bilder. Sensorbrus ar slumpmassigt och forsvinner
-    vid utjamningen, medan ett vardebyte andrar ett helt segment och star kvar.
-    Utan det skulle bruset ensamt kunna se ut som ett vardebyte, och da blir
-    varje bild sin egen grupp utan att nagon medelvardesbildning sker.
+    vid utjamningen, medan ett sidbyte andrar ett helt segment och star kvar.
+    Utan det skulle bruset ensamt kunna se ut som ett sidbyte, och da blir varje
+    bild sin egen grupp utan att nagon typisk bild byggs.
     """
     groups: list[list[int]] = []
 
@@ -1163,11 +1163,17 @@ def group_similar(crops: list[np.ndarray], threshold: float = 8.0) -> list[list[
     return groups
 
 
-def average_crops(crops: list[np.ndarray], indices: list[int]) -> np.ndarray:
-    """Medelvardet av de valda bilderna."""
+def typical_crops(crops: list[np.ndarray], indices: list[int]) -> np.ndarray:
+    """Den typiska bilden av de valda: medianen pixel for pixel.
+
+    Median i stallet for medelvarde. Displayen flimrar - nagra bilder tas mitt i
+    en uppdatering och har svagare siffror - och ett medelvarde drar in aven de
+    bilderna, sa att siffrorna blir grumliga och tappar konfidens. Medianen vags
+    inte ner av dem.
+    """
     if len(indices) == 1:
         return crops[indices[0]]
-    return np.mean([crops[i] for i in indices], axis=0)
+    return np.median(np.stack([crops[i] for i in indices]), axis=0)
 
 
 def image_from_crop(crop: np.ndarray, roi: Box) -> np.ndarray:
@@ -1188,7 +1194,7 @@ def read_crops(
     threshold: float = 8.0,
     min_frames: int = 1,
 ) -> list[Reading]:
-    """Tolkar en serie utsnitt, med medelvardesbildning inom varje grupp."""
+    """Tolkar en serie utsnitt, med en typisk bild (median) inom varje grupp."""
     if not crops:
         return []
 
@@ -1197,8 +1203,8 @@ def read_crops(
     for indices in group_similar(crops, threshold):
         if len(indices) < min_frames:
             continue
-        averaged = average_crops(crops, indices)
-        image = image_from_crop(averaged, cal.roi)
+        typical = typical_crops(crops, indices)
+        image = image_from_crop(typical, cal.roi)
         reading = read_image(image, cal, cfg, timestamp=float(len(indices)))
         reading.weight = len(indices)
         readings.append(reading)

@@ -368,6 +368,95 @@
 			],
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Läs serie s3",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\fit_cells.py",
+				"captures\\series\\s3",
+				"--read"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Läs 204313",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\fit_cells.py",
+				"captures\\runs\\20260920_204313",
+				"--read"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Läs demo",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\fit_cells.py",
+				"captures\\demo",
+				"--read"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Läs nu (live)",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"read",
+				"--seconds",
+				"70",
+				"--spara"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Läs 210122",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\fit_cells.py",
+				"captures\\runs\\20260920_210122",
+				"--read"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Spela upp senaste körningen",
+			"type": "shell",
+			"command": "$d = Get-ChildItem captures\\runs | Sort-Object Name | Select-Object -Last 1; Write-Output \"Korning: $($d.Name)\"; & .venv\\Scripts\\python.exe tools\\replay_run.py $d.FullName",
+			"args": [],
+			"group": "build"
+		},
+		{
+			"label": "Spela upp alla sparade körningar",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\replay_run.py",
+				"--tyst",
+				"captures\\runs\\20260920_204313",
+				"captures\\runs\\20260920_210122",
+				"captures\\runs\\20260920_210514",
+				"captures\\runs\\20260920_210824",
+				"captures\\series\\s3"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Mät siffrorna mot kända bilder",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\check_digits.py",
+				"--verbose"
+			],
+			"group": "build"
 		}
 	]
 }

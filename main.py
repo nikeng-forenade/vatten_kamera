@@ -289,8 +289,19 @@ def cmd_read(cfg: Config, args: argparse.Namespace) -> int:
     print()
     print(f"bilder lasta  : {summary.frames_taken}")
     print(f"lasbara bilder: {summary.frames_readable}")
+    rostade = [item for item in summary.details if item.get("rostad")]
+    if rostade:
+        print(
+            f"rostar pa     : vardesidan efter 02:00 - "
+            f"{len(rostade)} grupper, {sum(item['bilder'] for item in rostade)} bilder"
+        )
+    if summary.page_note:
+        print(f"rostning      : {summary.page_note}")
     if summary.value:
-        print(f"VARDET        : {summary.numeric:.0f}  (text {summary.value!r})")
+        # Skriv vardet med displayens decimaler: "090" ar 0.90, inte 1.
+        decimals = cfg.reader.decimals
+        shown = f"{summary.numeric:.{decimals}f}" if summary.numeric is not None else "?"
+        print(f"VARDET        : {shown}  (text {summary.value!r})")
         print(f"roster        : {summary.votes}/{summary.frames_taken}  konfidens {summary.confidence:.2f}")
     else:
         print(f"inget varde kunde faststallas ({summary.error})")

@@ -43,6 +43,28 @@ def test_tom_cell_ar_slackt() -> None:
     assert result.blank, f"tom cell blev {result.char!r}"
 
 
+def test_nia_med_glod_i_springan_blir_nia() -> None:
+    """Gloden runt segmenten lyser upp springorna - en nia far inte bli en atta.
+
+    Pa den verkliga displayen smetar gloden fran bottenstrecket och mittstapeln
+    in i det nedre vanstra segmentet. Vid matning pa vardet 0.92 (2026-09-20)
+    hade e-fonstret 0.58 i ljusniva men bara nagra procent fyllt. Matt pa
+    ljusniva gjorde nian till en atta - 0.92 publicerades som 0.82.
+    """
+    from segments import SEGMENT_BOXES
+
+    cell = render_digit("9")
+    height, width = cell.shape[:2]
+    fx1, fy1, fx2, fy2 = SEGMENT_BOXES["e"]
+    y1, y2 = int(fy1 * height), max(int(fy1 * height) + 1, int(np.ceil(fy2 * height)))
+    x1, x2 = int(fx1 * width), max(int(fx1 * width) + 1, int(np.ceil(fx2 * width)))
+    cell[y1:y2, x1:x2] = np.maximum(cell[y1:y2, x1:x2], 0.58)
+
+    result = decode_cell(cell)
+    assert result.char == "9", f"nian med glod lastes som {result.char}"
+    assert result.confidence > 0.6, f"nian hade lag konfidens {result.confidence}"
+
+
 def test_jamn_gra_yta_ger_inget_varde() -> None:
     # En helt jamn yta (pumphuset) far inte lasas som en atta. Utan kontrast
     # finns ingen siffra, och da ska ingen konfidens rapporteras.
@@ -67,6 +89,49 @@ def test_jamn_yta_ger_ingen_saker_lasning() -> None:
 def test_alla_siffror_har_unikt_monster() -> None:
     # Skyddar mot att ett tecken rakar fa samma bitmask som ett annat.
     assert len(set(DIGIT_MASKS.values())) == len(DIGIT_MASKS)
+
+
+# Segmentvardena nedan ar avlasarens EGNA matt pa riktiga bilder, gjorda med
+# tools/check_digits.py (2026-09-21). De ar inte ett idealt sjusegment: pa den
+# har displayen nar fyran hoger stapel anda upp i overkanten, sexan och femman
+# har en hake i det ovre hogra hornet, och gloden runt staplarna smetar in i
+# ovre vanstra (f) och nedre vanstra (e). Testerna nedan ritar upp precis de
+# matten och kraver att siffran ands lases ratt.
+MATTA_MONSTER: list[tuple[str, dict[str, float]]] = [
+    ("0", {"a": 0.99, "b": 0.99, "c": 0.99, "d": 1.00, "e": 0.84, "f": 0.99, "g": 0.00}),
+    ("1", {"a": 0.06, "b": 1.00, "c": 0.99, "d": 0.00, "e": 0.00, "f": 0.07, "g": 0.00}),
+    ("3", {"a": 0.94, "b": 1.00, "c": 0.99, "d": 0.98, "e": 0.43, "f": 0.26, "g": 1.00}),
+    ("4", {"a": 1.00, "b": 1.00, "c": 0.99, "d": 0.00, "e": 0.00, "f": 0.99, "g": 1.00}),
+    ("5", {"a": 1.00, "b": 0.29, "c": 0.99, "d": 0.94, "e": 0.32, "f": 0.99, "g": 1.00}),
+    ("6", {"a": 0.99, "b": 0.61, "c": 0.99, "d": 1.00, "e": 0.96, "f": 0.99, "g": 1.00}),
+    ("7", {"a": 0.99, "b": 0.99, "c": 1.00, "d": 0.00, "e": 0.00, "f": 0.10, "g": 0.00}),
+    ("9", {"a": 1.00, "b": 1.00, "c": 0.99, "d": 1.00, "e": 0.34, "f": 0.99, "g": 1.00}),
+]
+
+
+def cell_from_pattern(values: dict[str, float], width: int = 60, height: int = 110) -> np.ndarray:
+    """Ritar en cell med de matt som gjordes pa displayen.
+
+    Staplarna ritas med RENDER_BOXES och mats med SEGMENT_BOXES - precis som mot
+    en riktig bild, dar de tva geometrierna inte ar samma.
+    """
+    from segments import RENDER_BOXES
+
+    canvas = np.zeros((height, width), dtype=np.float32)
+    for name, value in values.items():
+        fx1, fy1, fx2, fy2 = RENDER_BOXES[name]
+        canvas[
+            int(fy1 * height) : int(np.ceil(fy2 * height)),
+            int(fx1 * width) : int(np.ceil(fx2 * width)),
+        ] = value
+    return canvas
+
+
+def test_siffrorna_som_displayen_visar_lases_ratt() -> None:
+    for expected, values in MATTA_MONSTER:
+        result = decode_cell(cell_from_pattern(values))
+        assert result.char == expected, f"{expected} lastes som {result.char}"
+        assert result.confidence > 0.3, f"{expected} hade konfidens {result.confidence:.2f}"
 
 
 def test_las_syntetiskt_tal() -> None:

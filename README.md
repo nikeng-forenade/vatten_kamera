@@ -223,7 +223,7 @@ något ändras, så `image restore` kan alltid ta dig tillbaka.
 | **Läs blåkanalen, inte gråskala** | Rött ljus har inget blått. I blåkanalen lyser siffrorna medan den röda glöden runt dem blir svart — det ger en ren, skarp bild. Sätts med `COLOR_CHANNEL=b`. |
 | **Hög tröskel (`THRESHOLD=250`)** | Siffrorna är mättade medan spegelbilden i displayglaset är svag. Tröskeln håller spegelbilden borta så att sifferbandet inte blir för högt. |
 | **Mättad exponering, inte "lagom"** | Displayen lyser själv, men i blåkanalen är en röd LED svag — blir siffrorna inte mättade smiter de igenom tröskeln. `main.py image tune` mäter hur långt varje segments ljusnivå ligger från mitten (där tolken inte kan skilja tänt från släckt). Mätt 2026-09-20: **gain 40 + 1/50** gav celler på 95×103 px och värdet `116` med konfidens 0.57–0.62, medan **gain 20 + 1/250** gav en fem gånger mörkare bild där cellerna krympte till 60×88 px och läsningen gav skräp (`1`, `3`, `?4`, `31`). |
-| Displayens **nia har ett kort bottenstreck** (börjar först vid mitten) | Bottenstreckets fönster mäts därför i cellens högra halva — i vänstra halvan ser nians bottenstreck släckt ut (konfidens 0.07). Priset är att ettans stapel tänder samma fönster, så en etta får konfidens 0.15–0.20. Båda siffrorna läses ändå rätt (ettan känns igen på att a, f och g är släckta), men marginalen är mindre — därför är `MIN_CONFIDENCE` lågt satt. |
+| Displayens **nia har ett fullt bottenstreck** | Nian är `a, b, c, d, f, g` och skiljs från en åtta av det **nedre vänstra** segmentet, som är släckt på en nia. Glöden från bottenstrecket och mittstapeln smetar in i det fönstret och lyfter ljusnivån där till ~0.58 — mätt på ljusnivå blev `0.92` därför `0.82`. De tre segment som ligger inklämda mellan tända staplar (mitten, botten och nedre vänster) mäts därför på hur **fyllt** fönstret är, inte på ljusnivå. Då blir nian `9` med konfidens 0.83–0.85. |
 
 ### Läsprofilen — kameran lånas bara under läsningen
 
@@ -255,6 +255,32 @@ run.cmd main.py peek --scale 8 --nearest      # råa pixlar, ingen utjämning
 
 Kommandot skriver också ut vilken färgkanal avläsaren valde och sparar
 `captures/peek_channel.png` — exakt den bild tolkningen utgår ifrån.
+
+### Displayens siffror är mätta, inte ideala
+
+Mätfönstren i `segments.py` ska inte beskriva ett *idealt* sjusegment utan den här
+displayens typsnitt. Fyra saker skiljer sig, och alla är mätta mot riktiga bilder
+(2026-09-21):
+
+| Vad displayen gör | Vad det ställde till | Vad som gjordes |
+|---|---|---|
+| **Fyran** har en höger stapel som når ända upp i överkanten | `a`-fönstret mättes till 1.00 på en fyra. Med ett idealt mönster (a släckt) blev fyran i stället en **nia** — båda hade precis ett fel, felen blev lika stora och konfidensen **0.00** | Mönstret för `4` beskriver displayens fyra (`a, b, c, f, g`). Det som skiljer fyran från nian är **bottenstrecket** |
+| **Sexan och femman** har en hake: översta strecket böjer av nedåt i övre högra hörnet | `b` mättes till 0.61 på en sexa. 0.61 ligger närmare 1 än 0, så sexan lästes som en **åtta** | `b` mäts som **fyllnad** (hur stor del av fönstret som är mättat), inte som ljusnivå — haken glöder men fyller inte fönstret |
+| **Översta streckets vänstra ände** lutar nedåt i övre vänstra hörnet | `f` mättes till 0.26 på en trea. Trean och nian skiljs *bara* av `f`, så trean blev tvetydig (konfidens 0.33, kravet är 0.35) | `f` mäts också som fyllnad |
+| **Bottenstreckets glöd** når upp i nedre vänstra hörnet | `e`-fönstret var fyllt till 43 % på en nia, och nian och åttan kom så nära varandra att nian fick konfidens **0.22** | `e`-fönstret flyttat upp till y 0.58–0.70, där en sexa är mättad och glöden inte når |
+
+Kontrollera mätningen mot riktiga bilder — det är så fönstren ska ändras, inte på
+känsla:
+
+```powershell
+run.cmd tools/check_digits.py --verbose
+```
+
+Verktyget läser 20 sparade bilder där vi vet vad displayen visade (klockan `1709`,
+spolttiden `0200`, värdet `064`, flödet `000`, …), jämför siffra för siffra och
+skriver ut både vad avläsaren fick och de uppmätta segmentvärdena för varje siffra
+som inte nådde 0.5 i konfidens. Just nu: **80 av 80 siffror rätt, ingen under 0.5**.
+Lägg till fler bilder i `LABELS` när nya siffror dyker upp på displayen.
 
 ## Displayen
 
@@ -297,29 +323,120 @@ run.cmd tools/probe_cell.py captures/s2/000_152050.jpg --cell 2
 
 Det var så mätfönstren i `segments.py` hamnade rätt.
 
+### Sidvarvet
+
+Displayen växlar mellan fyra sidor, ~14 sekunder var, i den här ordningen:
+
+| Ordning | Sida | Exempel | Känns igen på |
+|---|---|---|---|
+| 1 | klockan | `20:43` | alla fyra positionerna tända |
+| 2 | spolttiden | `02:00` | alla fyra positionerna tända |
+| 3 | **värdet** | `0.91` | första positionen släckt |
+| 4 | flödet | `0.00` | första positionen släckt |
+
+Värdet och flödet ser **exakt likadana ut** för avläsaren — båda är tre siffror med den
+första positionen släckt. Det enda som skiljer dem är ordningen i varvet, och värdet
+kommer direkt efter spolttiden. Programmet röstar därför bara på de läsningar som följer
+på en spolttidssida. Kommer ingen värdesida efter spolttiden (fönstret tog slut mitt i
+varvet) publiceras **inget** värde — hellre det än att `0.00` går ut som om det vore
+"liter kvar".
+
+Tidssidorna har alla fyra positionerna tända, så `REQUIRE_BLANK_FIRST` förkastar dem:
+klockan `20:43` kan aldrig bli värdet `2.04`.
+
+### Toningar är inte sidor
+
+Sidan letas upp i två steg, och det är skillnaden mellan att tappa värdet och att få det:
+
+1. **Värdet** tas från den första grupp i sidan som vilar på tillräckligt många bilder
+   (`PAGE_MIN_FRAMES = 4` i `pipeline.py`). Sidan står stilla i 10–12 s och blir därför
+   en enda stor grupp på 14–20 bilder, medan en **toning** mellan två sidor bara ger en
+   eller ett par bilder — och en toning kan läsas som ett värde som inte finns på
+   displayen.
+2. **Alla** läsningar med det värdet får rösta, inte bara den största gruppen.
+
+Båda stegen behövdes. I körningen 21:01 lästes en toning som `0891`; den blev "sidan",
+svepet tog slut där, och de 14 bilderna på `0.91` kom aldrig med i röstningen — inget
+värde publicerades. I körningen 21:05 låg värdesidan i grupper om 1+1+1+1+15 bilder, och
+bara den sista gruppen fick ligga till grund. Nu väger hela sidan, och båda körningarna
+ger värdet.
+
+En **oläsbar** grupp som vilar på många bilder är också en sida — och den första sidan
+efter spolttiden är värdet. Går den inte att läsa publiceras **inget** värde, i stället för
+att röstningen fortsätter till flödessidan som ser likadan ut. Det var precis vad som
+hände i körningen 17:14: värdet `0.64` syntes i 15 bilder, men siffran `4` kunde inte
+skiljas från `9`, sidan fick konfidens 0.00 och `0.00` gick ut som "liter kvar".
+
+Varje körning skriver dessutom ner vad varje grupp lästes som i `summary.json`
+(`details`), så en natt går att granska i efterhand utan att kameran körs om.
+
+### Spela upp en sparad körning
+
+```powershell
+run.cmd tools/replay_run.py captures\runs\20260920_210122
+```
+
+Bilderna från varje körning ligger kvar i `captures/runs/<tid>/`. Verktyget kör samma
+tolkning och samma röstning på dem och skriver ut vad varje grupp lästes som, vilken sida
+som valdes och hur många röster den fick — plus vad själva körningen kom fram till.
+Avslutar med status 0 om ett värde kom ut. Då går det att se efteråt varför en natt gick
+fel, utan att vänta till nästa 02:00.
+
+Bilderna i en körning är den **mittersta bilden ur varje grupp**; antalet bilder läses ur
+filnamnet (`grupp20_20bilder_090.jpg`), så vikten i röstningen blir den samma som i
+körningen. Vill du prova röstningen på alla bilder i en sida tar du en serie i stället
+(`captures/series/s3`, 100 bilder) — där blir konfidensen också den rätta.
+
 ## Verifierat och inte verifierat
 
-**Verifierat 2026-09-20** mot verkliga bilder (54 stycken, tagna med en sekunds mellanrum):
+**Verifierat 2026-09-20** mot verkliga bilder — en serie på 100 bilder tagna med två
+sekunders mellanrum (20:48–20:51), plus körningen 20:43:
 
 | Vy | Displayen visar | Läsaren får ut |
 |---|---|---|
-| klockan | `15:15`, `18:16` | `1515`, `1816` — rätt siffror |
-| spoltiden | `02:00` | `0200` |
-| värdet | `0.10` | `010` (0.10 med `DECIMALS=2`) |
-| värdet | `0.00` | `000` |
+| klockan | `20:43`, `20:44`, `20:45`, `20:46` | `2043`–`2046` — alla fyra positionerna tända, förkastas |
+| spolttiden | `02:00` | `0200` — förkastas |
+| **värdet** | `0.92` (20:43), `0.91` (20:48) | `092`, `091` med konfidens 0.83–0.85 |
+| flödet | `0.00` | `000` med konfidens 0.76–0.85 — samma form som värdet, skiljs bara av ordningen |
 
-Klockslagen och spoltiden har alla fyra positioner tända och förkastas därför av
-`REQUIRE_BLANK_FIRST` — bara värdevyerna, där första positionen är släckt, kan bli ett
-publicerat värde. Det var så det var tänkt, och det håller.
+Det var så sidvarvet konstaterades: klocka → spolttid → värde → flöde.
+
+**Verifierat 2026-09-21** genom att spela upp körningarna från 2026-09-20 med
+`tools/replay_run.py`:
+
+| Körning | Tidigare | Nu |
+|---|---|---|
+| 20:43 | `000` (flödessidan — fel sida, men ett värde kom ut) | inget värde: spolttiden låg sist i fönstret, så värdet och flödet gick inte att skilja åt |
+| 21:01 | inget värde (toningen `0891` kapade svepet) | **`0.91`** |
+| 21:05 | inget värde (sidan delad i 1+1+1+1+15 bilder) | **`0.90`** |
+| 21:08 | `0.90` | `0.90` |
+| 20:48-serien, 100 bilder | `0.91` | `0.91` (21 röster, konfidens 0.87) |
+
+Körningen 20:43 visar samma sak som spärren är till för: där kom ett värde ut som inte
+var värdet. Nu publiceras hellre inget än flödet.
+
+**Verifierat 2026-09-21 live**, mot kameran (`main.py read --seconds 70`):
+
+| Klockan | Vad displayen visade | Vad som kom ut |
+|---|---|---|
+| 17:14 | värdet `0.64`, flödet `0.00` | **`0.00`** — värdessidan fick konfidens 0.00 (siffran `4` kunde inte skiljas från `9`) och röstningen föll igenom till flödet |
+| 17:28 | värdet `0.63`, flödet `0.00` | **`0.63`**, 15 av 15 bilder, konfidens 0.85 |
+
+Körningen 17:14 är hela felet i ett nötskal: ett **felaktigt** värde publicerades medan
+rätt värde syntes i bilden. Efter mätningarna ovan läses alla siffror 0–9 rätt.
 
 Att en nolla kan läsas som en åtta var det fel som kostade mest tid: nollans hål ligger på
 x 0.40–0.63 i cellen, men mätfönstret låg på 0.28–0.45 och träffade den vänstra stapeln.
 Glöden kring segmenten varierar dessutom mellan bilderna, så ljusnivån räckte inte som
-mått. Nu avgörs mittensegmentet av hur stor del av hålet som är fyllt.
+mått. Nu avgörs mittensegmentet av hur stor del av hålet som är fyllt — och samma mått
+används för bottenstrecket och det nedre vänstra segmentet, där glöden gjorde nian till en
+åtta (`0.92` publicerades som `0.82`).
 
-**Inte verifierat:** en hel nattkörning klockan 02:00 med MQTT och lampa på plats.
-Värdevyerna `0.10` och `0.00` fångades dagtid; att just "liter kvar" står kvar i 10–12 s
-strax efter 02:00 är känt från displayen men inte mätt av programmet än.
+**Inte verifierat:** en hel nattkörning klockan 02:00 med MQTT och lampa på plats. Att
+"liter kvar" står kvar i 10–12 s strax efter 02:00 är känt från displayen men inte mätt av
+programmet än. Kontrollera den första natten efteråt med
+`run.cmd tools/replay_run.py captures\runs\<tid>` — där syns det svart på vitt vilken sida
+som valdes och hur många bilder som stod bakom värdet.
 
 ## Kända begränsningar
 
@@ -332,6 +449,11 @@ strax efter 02:00 är känt från displayen men inte mätt av programmet än.
   varnar ("en siffra ror vid ROI:ts kant") och `main.py calibrate` visar det direkt.
 * Ligger sifferraden under ~60 px per siffra blir läsningen osäker. Se avsnittet om
   kamerans placering ovan.
+* Displayen **tonar** in nästa sida. En bild mitt i en toning kan läsas som ett värde som
+  inte finns (t.ex. `0.91` → `0891`). Därför måste en sida vila på minst
+  `PAGE_MIN_FRAMES` bilder för att få bestämma värdet, och bara läsningar med samma värde
+  som den sidan får rösta. Följden är att ett mycket kort fönster kan ge **inget** värde —
+  det är avsiktligt.
 
 ## Drift på servern
 

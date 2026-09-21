@@ -25,12 +25,12 @@ from display_reader import (
     Consensus,
     Reading,
     ReaderError,
-    average_crops,
     consensus,
     crop_roi,
     group_similar,
     image_from_crop,
     read_image,
+    typical_crops,
 )
 from ha_client import HaError, HomeAssistant
 from mqtt_publisher import MqttPublisher
@@ -54,6 +54,9 @@ class RunSummary:
     lamp_used: bool
     frames_dir: str | None = None
     error: str = ""
+    # Vad röstningen gjorde, steg för steg — så att en körning går att granska i
+    # efterhand utan att kameran behöver köras om.
+    page_note: str = ""
     details: list[dict] = field(default_factory=list)
 
     def to_json(self) -> str:
@@ -151,9 +154,10 @@ class NightlyRunner:
     ) -> tuple[list[Reading], list[tuple[Reading, Path]]]:
         """Tar bilder under `duration_s`, vager samman lika bilder och tolkar dem.
 
-        Siffrorna ar sma, sa en enstaka bild ar kanslig for sensorns brus. Vi
-        samlar darfor alla utsnitt forst, laggar ihop de som visar samma varde
-        och tolkar medelvardesbilden. Bruset vags ut medan siffrorna star kvar.
+        Displayen flimrar: nagra bilder tas mitt i en uppdatering och har svagare
+        siffror. Vi samlar darfor alla utsnitt forst, slar ihop de som visar
+        samma sida och tolkar den typiska bilden (medianen pixel for pixel).
+        Medianen vags inte ner av de svaga bilderna, sa siffrorna star kvar.
         """
         cfg = self.cfg.run
         reader_cfg = self.cfg.reader
@@ -191,22 +195,22 @@ class NightlyRunner:
             return [], []
 
         groups = group_similar(crops, self.similarity_threshold)
-        log.info("%d bilder i %d grupper (varden som visar samma sak vags samman)",
+        log.info("%d bilder i %d grupper (samma sida slas ihop till en typisk bild)",
                  len(crops), len(groups))
 
         readings: list[Reading] = []
         saved: list[tuple[Reading, Path]] = []
 
         for group_number, indices in enumerate(groups, start=1):
-            averaged = average_crops(crops, indices)
+            typical = typical_crops(crops, indices)
             reading = read_image(
-                image_from_crop(averaged, self.calibration.roi),
+                image_from_crop(typical, self.calibration.roi),
                 self.calibration,
                 reader_cfg,
                 timestamp=float(len(indices)),
             )
             # Rosten vager lika tungt som antalet bilder i gruppen. Annars kan
-            # tio bilder av samma varde bara bli en enda rost i rostningen.
+            # tio bilder av samma sida bara bli en enda rost i rostningen.
             reading.weight = len(indices)
             readings.append(reading)
 
@@ -259,8 +263,10 @@ class NightlyRunner:
         run_dir = RUNS_DIR / started.strftime("%Y%m%d_%H%M%S") if save else None
         lamp_is_on = False
         error = ""
+        page_note = ""
         original_camera_xml = ""
         readings: list[Reading] = []
+        details: list[dict] = []
         result = Consensus(value=None, votes=0, total=0, confidence=0.0)
 
         log.info("startar korning (version %s), fonster %.0f s", VERSION, duration)
@@ -289,20 +295,46 @@ class NightlyRunner:
             readings, saved = self._capture_and_read(duration_s=duration, frames_dir=run_dir)
 
             # Vardet som ska ut visas strax efter att pumpen slog om till spolning
-            # (02:00). Resten av fonstret visar displayen sina andra sidor, och
-            # en av dem kan visa ett annat varde som ar latt att forvaxla. Da
-            # vore det fel att lata hela fonstret rostas ihop.
-            target = readings_after_recharge(readings)
-            if target:
-                log.info("rostar om %d lasningar efter spolttidssidan", len(target))
+            # (02:00). Sidvarvet ar: klockan -> spolttiden -> VARDET -> flodet,
+            # och bada vardesidorna (t.ex. 0.91 och 0.00) ser likadana ut for
+            # avlasaren: den forsta positionen slackt och tre siffror. Bara
+            # ordningen i varvet skiljer dem at, och forst kommer vardet. Darfor
+            # rostas bara det som kommer efter spolttidssidan.
+            target, page_note = voting_targets(readings)
+            voted = {id(reading) for reading in target}
+            details = [
+                {
+                    "grupp": number,
+                    "bilder": max(1, reading.weight),
+                    "sida": page_kind(reading),
+                    "varde": reading.value,
+                    "konfidens": round(reading.confidence, 2),
+                    "rostad": id(reading) in voted,
+                }
+                for number, reading in enumerate(readings, start=1)
+            ]
+            if page_note:
+                log.warning("%s", page_note)
+            elif len(target) == len(readings):
+                log.info("ingen spolttidssida i fonstret - rostar om alla %d lasningar", len(target))
             else:
-                target = readings
+                log.info(
+                    "rostar om %d av %d lasningar - de som foljer pa spolttidssidan",
+                    len(target),
+                    len(readings),
+                )
 
             result = consensus(
                 target,
                 min_agreement=cfg.min_agreement,
                 min_confidence=cfg.min_confidence,
                 decimals=self.cfg.reader.decimals,
+            )
+            log.info(
+                "rostning: %s (%d roster, konfidens %.2f)",
+                result.value or "inget varde",
+                result.votes,
+                result.confidence,
             )
 
             evidence = self._pick_evidence(saved, result.value)
@@ -314,7 +346,7 @@ class NightlyRunner:
                     image=str(evidence) if evidence else None,
                 )
             else:
-                reason = _failure_reason(readings, cfg.min_confidence)
+                reason = _failure_reason(readings, cfg.min_confidence, note=page_note)
                 self.mqtt.publish_failure(reason)
                 if cfg.notify_on_failure and self.ha.configured:
                     self.ha.notify(f"Kunde inte lasa pumpdisplayen: {reason}")
@@ -345,6 +377,8 @@ class NightlyRunner:
                 lamp_used=lamp_is_on,
                 frames_dir=str(run_dir) if run_dir else None,
                 error=error,
+                page_note=page_note,
+                details=details,
             )
 
             if run_dir is not None:
@@ -393,33 +427,148 @@ def page_kind(reading: Reading) -> str:
     return "okant"
 
 
-def readings_after_recharge(readings: list[Reading], *, span: int = 4) -> list[Reading]:
-    """Lasningarna som foljer pa spolttidssidan (displayens 02:00).
+# Hur manga bilder en grupp maste vila pa for att raknas som en SIDA pa displayen
+# och inte som en toning mellan tva sidor. Nar vardet halls kvar star displayen
+# stilla i 10-12 s, och da blir hela sidan EN grupp pa 14-20 bilder, medan en
+# toning bara ger en eller ett par bilder. Uppmatt pa korningarna
+# captures/runs/20260920_2101-2108: vardesidan 14-20 bilder, toningarna 1 bild.
+PAGE_MIN_FRAMES = 4
+
+
+def is_recharge_page(reading: Reading) -> bool:
+    """Visar den har lasningen spolttidssidan (displayens 02:00)?"""
+    return (reading.value or "").strip() == "0200"
+
+
+def has_recharge_page(readings: list[Reading]) -> bool:
+    """Syntes spolttidssidan (displayens 02:00) i den har korningen?"""
+    return any(is_recharge_page(reading) for reading in readings)
+
+
+def voting_targets(readings: list[Reading]) -> tuple[list[Reading], str]:
+    """Vilka lasningar som far ligga till grund for rostningen, och varfor inte fler.
+
+    Returnerar lasningarna och en anteckning. En tom lista betyder att inget
+    varde far publiceras: antingen syntes spolttidssidan bara sist i fonstret,
+    eller sa stod vardesidan dar utan att ga att lasa. Flodessidan ser precis
+    likadan ut som vardesidan for avlasaren, och den kommer efterat - den far
+    aldrig publiceras i stallet.
+    """
+    target, unreadable = _voting_targets(readings)
+    if target:
+        return target, ""
+    if unreadable:
+        return [], (
+            "vardesidan stod dar men gick inte att lasa, och flodessidan som foljer"
+            " gar inte att skilja fran den - inget varde publiceras"
+        )
+    if has_recharge_page(readings):
+        return [], (
+            "spolttidssidan syntes bara sist i fonstret, sa ingen vardesida kom efter"
+            " den - vardet och flodet gar inte att skilja at"
+        )
+    return list(readings), ""
+
+
+def readings_after_recharge(readings: list[Reading]) -> list[Reading]:
+    """Lasningarna pa vardesidan som foljer pa spolttidssidan (displayens 02:00).
 
     Vardet som ska ut visas strax efter att pumpen slar om till spolning. Resten
-    av dygnet vaxlar displayen mellan klockan, spolttiden och sina tva vardesidor,
-    och da kan ett annat varde visa sig oftare och fa flest roster. Har rostas
-    darfor bara det som kommer efter spolttidssidan.
+    av dygnet vaxlar displayen mellan klockan, spolttiden, vardet och flodet -
+    och bada vardesidorna ser likadana ut for avlasaren, sa det ar bara
+    ordningen i varvet som skiljer dem at. Vardet kommer forst.
+
+    Tva saker gjorde att en korning tappade vardet fastan det syntes i bilderna:
+
+    * En toning mellan tva sidor blir en egen liten grupp. Lastes den som ett
+      annat varde kapade den svepet direkt, och den stora gruppen med ratt varde
+      kom aldrig med i rostningen. (Korningen 21:01: en bild lastes som '0891',
+      och de 14 bilderna pa 0.91 forsvann.)
+    * Vardesidan kan delas i flera grupper nar displayen flimrar. Da vager bara
+      en av dem, och en grupp pa en enda bild nar inte upp i MIN_AGREEMENT.
+      (Korningen 21:05: sidan la i grupper om 1+1+1+1+15 bilder, och bara den
+      sista fick ligga till grund.)
+
+    Sidan letas darfor upp i tva steg: forst VARDET - fran den forsta grupp som
+    vilar pa tillrackligt manga bilder for att vara en sida och inte en toning -
+    och sedan ALLA lasningar med det vardet, sa att hela sidan vager.
 
     Returnerar en tom lista om spolttidssidan inte syntes i korningen - da far
     hela korningen ligga till grund for rostningen i stallet.
     """
-    anchors = [index for index, reading in enumerate(readings) if (reading.value or "").strip() == "0200"]
-    if not anchors:
-        return []
+    return _voting_targets(readings)[0]
 
-    # Flera spolttidssidor i rad pekar pa samma vardesida. Den ska bara rakna en
-    # gang, annars vager en enda grupp bilder tyngre an den ar vard.
+
+def _voting_targets(readings: list[Reading]) -> tuple[list[Reading], bool]:
+    """Rostningsunderlaget, och om vardesidan stod dar utan att kunna lasas."""
+    anchors = [index for index, reading in enumerate(readings) if is_recharge_page(reading)]
+    if not anchors:
+        return [], False
+
     chosen: list[Reading] = []
     seen: set[int] = set()
+    unreadable = False
+
     for index in anchors:
-        for position, candidate in enumerate(readings[index + 1 : index + 1 + span], start=index + 1):
-            if page_kind(candidate) == "varde":
-                if position not in seen:
-                    seen.add(position)
-                    chosen.append(candidate)
+        page, blocked = _value_page_window(readings, index)
+        unreadable = unreadable or blocked
+        if not page:
+            continue
+        value = _page_value(readings, page)
+        if value is None:
+            continue
+        for position in page:
+            if readings[position].value == value and position not in seen:
+                seen.add(position)
+                chosen.append(readings[position])
+
+    return chosen, unreadable
+
+
+def _value_page_window(readings: list[Reading], anchor: int) -> tuple[list[int], bool]:
+    """Index for vardelasningarna efter spolttidssidan, fram till nasta tidssida.
+
+    Tidssidor mellan spolttiden och vardet hoppas over: flera grupper med 02:00 i
+    rad ar samma sida delad av flimmer, och da visar displayen anda vardesidan
+    harnast. Forst nar vardelasningarna borjat marker en tidssida att svepet ar
+    slut.
+
+    En grupp som varken ar en tidssida eller en last vardesida ar antingen en
+    toning (en bild) eller en sida som inte gick att lasa (manga bilder). Den
+    senare ar vardesidan - korningen 17:14 matte 15 bilder pa vardet 0.64 till
+    konfidens 0.00, och rostningen fortsatte till flodessidan och publicerade
+    0.00. Da ar det battre att inget varde publiceras, och det sags de av att
+    `blocked` returneras.
+    """
+    window: list[int] = []
+    for position in range(anchor + 1, len(readings)):
+        kind = page_kind(readings[position])
+        if kind == "tid":
+            if window:
                 break
-    return chosen
+            continue
+        if kind == "varde":
+            window.append(position)
+            continue
+        if not window and max(1, readings[position].weight) >= PAGE_MIN_FRAMES:
+            return window, True
+    return window, False
+
+
+def _page_value(readings: list[Reading], window: list[int]) -> str | None:
+    """Vardet pa den sida fonstret visar forst.
+
+    Den forsta gruppen i fonstret kan vara en toning som last fel - en
+    halvfardig siffra ger ett varde som inte finns pa displayen. En riktig sida
+    vilar pa manga bilder, sa vardet tas fran den forsta grupp som ar stor nog
+    att vara en sida. Finns ingen sadan (ett kort fonster) tas den forsta
+    gruppen, och da ar ordningen i sidvarvet enda ledtraden.
+    """
+    solid = [
+        position for position in window if max(1, readings[position].weight) >= PAGE_MIN_FRAMES
+    ]
+    first = solid[0] if solid else window[0]
+    return readings[first].value
 
 
 def _safe_name(value: str | None) -> str:
@@ -432,9 +581,11 @@ def _safe_name(value: str | None) -> str:
     return cleaned or "x"
 
 
-def _failure_reason(readings: list[Reading], min_confidence: float) -> str:
+def _failure_reason(readings: list[Reading], min_confidence: float, *, note: str = "") -> str:
     if not readings:
         return "inga bilder kunde tas"
+    if note:
+        return note
     total = sum(max(1, r.weight) for r in readings)
     usable = [r for r in readings if r.ok]
     if not usable:
