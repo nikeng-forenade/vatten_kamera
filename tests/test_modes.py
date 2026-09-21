@@ -28,10 +28,12 @@ class Klar(Exception):
 
 
 def fejkad_summary() -> RunSummary:
+    """En körning som just blev klar (tiderna maste vara i nutid)."""
+    nu = datetime.now()
     return RunSummary(
         version="test",
-        started="2026-09-21T02:05:00",
-        finished="2026-09-21T02:06:00",
+        started=(nu - timedelta(minutes=1)).isoformat(timespec="seconds"),
+        finished=nu.isoformat(timespec="seconds"),
         frames_taken=10,
         frames_readable=10,
         value="058",
@@ -125,25 +127,28 @@ def test_manuellt_lage_laser_aldrig_av_sig_sjalv(monkeypatch: pytest.MonkeyPatch
 
 def test_intervall_laser_och_vantar_var_x_minut(monkeypatch: pytest.MonkeyPatch) -> None:
     instans = runner(monkeypatch, mode="intervall", every_minutes=10)
-    antal = {"korningar": 0, "vantat_till": []}
+    antal = {"korningar": 0, "nasta": []}
 
     def fejkad_korning(self: NightlyRunner, **kw: object) -> RunSummary:
         antal["korningar"] += 1
         return fejkad_summary()
 
-    def fejkad_vantan(self: NightlyRunner, target: datetime) -> None:
-        antal["vantat_till"].append(target)
-        raise Klar()
+    def fejkad_set_state(**kw: object) -> None:
+        if kw.get("next_run"):
+            antal["nasta"].append(datetime.fromisoformat(str(kw["next_run"])))
 
     monkeypatch.setattr(NightlyRunner, "run_once_if_free", fejkad_korning)
-    monkeypatch.setattr(NightlyRunner, "wait_until", fejkad_vantan)
+    monkeypatch.setattr(pipeline, "set_state", fejkad_set_state)
+    monkeypatch.setattr(
+        NightlyRunner, "wait_until", lambda self, target, **kw: (_ for _ in ()).throw(Klar())
+    )
 
     with pytest.raises(Klar):
         instans._run_forever()
 
     assert antal["korningar"] == 1
-    # Vantan ska ligga ~10 minuter fram i tiden.
-    kvar = antal["vantat_till"][0] - datetime.now()
+    # Nasta lasning ska ligga ~10 minuter fram i tiden - det granssnittet visar.
+    kvar = antal["nasta"][-1] - datetime.now()
     assert timedelta(minutes=9) < kvar <= timedelta(minutes=10)
 
 
@@ -153,6 +158,54 @@ def test_intervall_kortare_an_en_minut_tillats_inte() -> None:
 
     nu = datetime(2026, 9, 21, 12, 0, 0)
     assert NightlyRunner.next_interval_start(instans, after=nu) == nu + timedelta(minutes=1)
+
+
+def test_intervallet_raknas_fran_senaste_lasningen() -> None:
+    """Takten ar lastid + EVERY_MINUTES, inte klockan."""
+    instans = object.__new__(NightlyRunner)
+    instans.cfg = SimpleNamespace(run=RunConfig(mode="intervall", every_minutes=10))
+
+    lasningen_blev_klar = datetime(2026, 9, 21, 12, 3, 30)
+    assert NightlyRunner.nasta_efter(instans, lasningen_blev_klar) == datetime(
+        2026, 9, 21, 12, 13, 30
+    )
+
+
+def test_andrat_intervall_slar_igenom_under_vantan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sparar man 10 minuter medan tjansten vantar ska nasta lasning flyttas fram."""
+    instans = runner(monkeypatch, mode="intervall", every_minutes=5)
+    senast = datetime.now()
+
+    # Forsta omgangen ger samma lage (5 min), andra ger det nya (10 min).
+    anrop = {"n": 0}
+
+    def fejkad_reload(self: NightlyRunner) -> bool:
+        anrop["n"] += 1
+        if anrop["n"] >= 2:
+            instans.cfg = SimpleNamespace(run=RunConfig(mode="intervall", every_minutes=10))
+        return anrop["n"] >= 2
+
+    monkeypatch.setattr(NightlyRunner, "reload", fejkad_reload)
+
+    mal: list[datetime] = []
+
+    def fejkad_set_state(**kw: object) -> None:
+        if kw.get("next_run"):
+            mal.append(datetime.fromisoformat(str(kw["next_run"])))
+
+    def fejkad_vantan(self: NightlyRunner, target: datetime, **kw: object) -> None:
+        if len(mal) >= 2:
+            raise Klar()
+
+    monkeypatch.setattr(pipeline, "set_state", fejkad_set_state)
+    monkeypatch.setattr(NightlyRunner, "wait_until", fejkad_vantan)
+
+    with pytest.raises(Klar):
+        NightlyRunner._vanta_till(instans, lambda: instans.nasta_efter(senast), lage="intervall")
+
+    # Forst 5 minuter (gamla vardet), sedan 10 (det nya) - utan omstart.
+    assert timedelta(minutes=4) < mal[0] - senast <= timedelta(minutes=5)
+    assert timedelta(minutes=9) < mal[1] - senast <= timedelta(minutes=10)
 
 
 def test_noll_minuter_betyder_hela_tiden() -> None:

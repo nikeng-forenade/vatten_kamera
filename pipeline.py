@@ -14,6 +14,7 @@ import os
 import re
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -107,6 +108,16 @@ class RunSummary:
             "published_to": self.published_to,
             "error": self.error,
         }
+
+
+def _som_tid(text: str | None) -> datetime | None:
+    """Gor en sparad tidsstampel ('2026-09-21T20:21:01') till en datetime."""
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def _local_iso(text: str) -> str | None:
@@ -299,17 +310,26 @@ class NightlyRunner:
             target += timedelta(days=1)
         return target
 
-    def wait_until(self, target: datetime) -> None:
-        """Sover till klockslaget, i kortare steg sa att avbrott fungerar."""
+    def wait_until(self, target: datetime, *, tyst: bool = False) -> None:
+        """Sover till klockslaget, i kortare steg sa att avbrott fungerar.
+
+        `tyst` anvands av den som vantar i korta steg och sjalv talar om nar
+        nasta lasning ar - annars skulle loggen fyllas av mellansteg.
+        """
+        forsta = True
         while True:
             remaining = (target - datetime.now()).total_seconds()
             if remaining <= 0:
                 return
             if remaining > 5:
-                log.info("vantar %.1f min till %s", remaining / 60.0, target.strftime("%H:%M:%S"))
+                if not tyst:
+                    log.info(
+                        "vantar %.1f min till %s", remaining / 60.0, target.strftime("%H:%M:%S")
+                    )
                 time.sleep(min(remaining - 2, 60.0))
             else:
                 time.sleep(min(remaining, 0.25))
+            forsta = False
 
     # --- Lasning -----------------------------------------------------------
 
@@ -632,17 +652,25 @@ class NightlyRunner:
             status.stop()
 
     def next_interval_start(self, *, after: datetime | None = None) -> datetime:
-        """Nasta korning i lage 'intervall'.
+        """Nasta korning i lage 'intervall'."""
+        return self.nasta_efter(datetime.now() if after is None else after)
 
-        EVERY_MINUTES=0 betyder "hela tiden": nasta lasning startar direkt efter
-        den forra. En lasning tar en dryg minut, sa en kort paus behovs anda sa
-        att loggen gar att lasa och kameran hinner stalla in sig.
+    def nasta_efter(self, senast: datetime) -> datetime:
+        """Nasta lasning, raknat fran nar den forra blev klar.
+
+        Takten ar alltid var EVERY_MINUTES minut efter den forra lasningen -
+        inte efter klockan - sa att en lasning som tar lang tid inte forskjuter
+        schemat. EVERY_MINUTES=0 betyder "hela tiden": da startar nasta lasning
+        efter en kort paus (en lasning tar anda en dryg minut).
+
+        Vardet las ur `self.cfg`, som uppdateras av `reload()`. Andrar man
+        intervallet i granssnittet slar det darfor igenom direkt - aven mitt i
+        en vila.
         """
-        after = after or datetime.now()
         minuter = self.cfg.run.every_minutes
         if minuter <= 0:
-            return after + timedelta(seconds=INTERVAL_PAUSE_S)
-        return after + timedelta(seconds=max(60.0, minuter * 60.0))
+            return senast + timedelta(seconds=INTERVAL_PAUSE_S)
+        return senast + timedelta(seconds=max(60.0, minuter * 60.0))
 
     def busy(self) -> bool:
         """Ar en lasning redan i gang (t.ex. 'Las nu' i granssnittet)?
@@ -660,6 +688,42 @@ class NightlyRunner:
             log.warning("en lasning paga redan - hoppar over den har gangen")
             return None
         return self.run_once()
+
+    def _vanta_till(self, mal: Callable[[], datetime], *, lage: str) -> bool:
+        """Vantar tills `mal()` visar en tid som passerat.
+
+        Malet raknas om med jamna mellanrum, och `.env` lases om samtidigt - sa
+        byter man intervall, klockslag eller laslage i granssnittet slar det
+        igenom direkt, utan att tjansten startas om.
+
+        Returnerar False om laslaget andrades (da ska slingan lamna over).
+        """
+        forra: datetime | None = None
+        while True:
+            self.reload()
+            if self.cfg.run.mode != lage:
+                log.info("laslaget har andrats till %s", self.cfg.run.mode)
+                return False
+
+            target = mal()
+            set_state(next_run=target.isoformat(timespec="seconds"))
+            if target != forra:
+                kvar = (target - datetime.now()).total_seconds()
+                if kvar > 0:
+                    log.info(
+                        "nasta lasning %s (om %.1f min)",
+                        target.strftime("%H:%M:%S"),
+                        kvar / 60.0,
+                    )
+                forra = target
+
+            kvar = (target - datetime.now()).total_seconds()
+            if kvar <= 0:
+                return True
+            # Sov i korta steg, sa att en andrad installning marks snart.
+            self.wait_until(
+                datetime.now() + timedelta(seconds=min(kvar, VANTE_STEG_S)), tyst=True
+            )
 
     def _run_forever(self) -> None:
         """Kor enligt laget i MODE - och byter lage om .env andras.
@@ -697,6 +761,7 @@ class NightlyRunner:
             log.info(
                 "MODE=intervall - laser nu och sedan var %.0f minut", self.cfg.run.every_minutes
             )
+        senast = datetime.now()
         while True:
             set_state(mode="intervall")
             summary = self.run_once_if_free()
@@ -705,22 +770,25 @@ class NightlyRunner:
                     "klar: varde=%s roster=%d konfidens=%.2f fel=%s",
                     summary.value, summary.votes, summary.confidence, summary.error or "-",
                 )
-            target = self.next_interval_start()
-            set_state(next_run=target.isoformat(timespec="seconds"))
-            self.wait_until(target)
-            if self.reload() and self.cfg.run.mode != "intervall":
-                log.info("laslaget har andrats till %s", self.cfg.run.mode)
+                senast = _som_tid(summary.finished) or datetime.now()
+
+            # Nasta lasning = den forra blev klar + EVERY_MINUTES. Malet raknas om
+            # under vilan, sa att en andrad tid i granssnittet galler direkt.
+            if not self._vanta_till(lambda: self.nasta_efter(senast), lage="intervall"):
                 return
 
     def _kor_natt(self) -> None:
         """Vantar in klockslaget och laser tills vardet ar fangat."""
         while True:
-            target = self.next_run_time()
-            start_at = target - timedelta(seconds=self.cfg.run.pre_start_s)
-            log.info("nasta korning startar %s", start_at.strftime("%Y-%m-%d %H:%M:%S"))
-            set_state(next_run=start_at.isoformat(timespec="seconds"), mode="natt")
+            target = self.next_run_time() - timedelta(seconds=self.cfg.run.pre_start_s)
+            log.info("nasta korning startar %s", target.strftime("%Y-%m-%d %H:%M:%S"))
+            # Klockslaget raknas om under vilan, sa att en andrad RUN_AT galler.
+            if not self._vanta_till(
+                lambda: self.next_run_time() - timedelta(seconds=self.cfg.run.pre_start_s),
+                lage="natt",
+            ):
+                return
 
-            self.wait_until(start_at)
             summary = self.run_once_if_free()
             if summary is not None:
                 log.info(
@@ -728,11 +796,11 @@ class NightlyRunner:
                     summary.value, summary.votes, summary.confidence, summary.error or "-",
                 )
 
-            # Sov vidare till strax efter att korningen borde vara slut.
-            next_target = self.next_run_time()
-            self.wait_until(next_target - timedelta(seconds=self.cfg.run.pre_start_s))
-            if self.reload() and self.cfg.run.mode != "natt":
-                log.info("laslaget har andrats till %s", self.cfg.run.mode)
+            # Sov vidare till strax innan nasta klockslag.
+            if not self._vanta_till(
+                lambda: self.next_run_time() - timedelta(seconds=self.cfg.run.pre_start_s),
+                lage="natt",
+            ):
                 return
 
 
@@ -766,6 +834,11 @@ PAGE_MIN_FRAMES = 3
 # bilder - och de behover inte komma direkt efter varandra, for en enstaka
 # bild mitt i ett sidbyte kan bli fel utan att vardet ar ett annat.
 READY_FRAMES = 3
+
+# Hur ofta tjansten tittar efter andrade installningar medan den vantar (s).
+# Kort nog att en andring i granssnittet marks direkt, langt nog att inte lasa
+# om .env i tid och otid.
+VANTE_STEG_S = 15.0
 
 
 class ReadyTracker:
