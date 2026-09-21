@@ -18,9 +18,11 @@ debug_frames/
 *.png
 !docs/**/*.png
 
-# Senaste lasningen och loggen - skrivs av tjansten, inte kod.
+# Senaste lasningen, historiken och loggen - skrivs av tjansten, inte kod.
 latest.json
 latest.json.tmp
+history.jsonl
+history.jsonl.tmp
 *.log
 
 # Pythonskrräp

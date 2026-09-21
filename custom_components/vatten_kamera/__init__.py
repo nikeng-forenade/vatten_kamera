@@ -9,6 +9,7 @@ vardet over HTTP och visar det som entiteter:
     sensor.vatten_kamera_status         - tjänstens lage i text
     binary_sensor.vatten_kamera_lasning_ok - gick senaste lasningen bra
     button.vatten_kamera_las_nu         - starta en lasning direkt
+    camera.vatten_kamera_senaste_bild   - bilden vardet lastes ur
 
 Vardetjanstens adress anges nar integrationen laggs till (IP och port).
 """
@@ -32,6 +33,7 @@ PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.CAMERA,
 ]
 
 

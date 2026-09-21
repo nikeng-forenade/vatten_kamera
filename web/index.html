@@ -64,6 +64,23 @@
             white-space: pre-wrap; font-family: ui-monospace, Consolas, monospace; }
   .hint { font-size: .78rem; color: var(--dim); margin-top: 8px; }
   .warn { color: #ffc266; }
+
+  /* Grafen: vardet over tid, och bilden bakom den punkt man klickar pa. */
+  .graf-rad { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+  .graf-vy { flex: 1 1 380px; min-width: 320px; }
+  #graf { width: 100%; height: 220px; display: block; }
+  #graf .rutnat { stroke: var(--line, #2a2f3a); stroke-width: 1; }
+  #graf .linje { fill: none; stroke: #4da3ff; stroke-width: 2; }
+  #graf .punkt { fill: #4da3ff; cursor: pointer; }
+  #graf .punkt:hover { fill: #ffd166; }
+  #graf .vald { fill: #ffd166; stroke: #fff; stroke-width: 1.5; }
+  #graf .misslyckad { fill: #7a4a4a; }
+  #graf text { fill: var(--dim); font-size: 11px; }
+  .graf-fot { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+  .graf-fot select { padding: 4px 8px; }
+  .graf-bild { flex: 0 1 320px; margin: 0; }
+  .graf-bild img { width: 100%; border-radius: 8px; border: 1px solid #2a2f3a; }
+  .graf-bild figcaption { font-size: .78rem; color: var(--dim); margin-top: 6px; }
   .live-toggle { display: flex; align-items: center; gap: 6px; font-size: .82rem; color: var(--dim);
                  margin-left: auto; cursor: pointer; user-select: none; }
   .live-toggle input { accent-color: var(--green); }
@@ -91,6 +108,29 @@
     </div>
     <img id="bild" hidden alt="Bilden avläsaren valde">
   </div>
+
+  <section class="panel">
+    <h2>Värdets utveckling <span class="dim" id="grafInfo"></span></h2>
+    <div class="graf-rad">
+      <div class="graf-vy">
+        <svg id="graf" viewBox="0 0 800 220" preserveAspectRatio="none" role="img"
+             aria-label="Värdet över tid"></svg>
+        <div class="graf-fot">
+          <select id="grafPeriod" title="Hur långt bakåt grafen visar">
+            <option value="6">6 timmar</option>
+            <option value="24" selected>24 timmar</option>
+            <option value="168">7 dygn</option>
+            <option value="720">30 dygn</option>
+          </select>
+          <span class="hint">Klicka på en punkt för att se bilden den lästes ur.</span>
+        </div>
+      </div>
+      <figure class="graf-bild">
+        <img id="grafBild" hidden alt="Bilden bakom den valda punkten">
+        <figcaption id="grafText">Ingen punkt vald.</figcaption>
+      </figure>
+    </div>
+  </section>
 
   <div class="grid">
     <div class="card">
@@ -257,6 +297,114 @@ async function refreshStatus() {
 async function refreshLog() {
   const data = await api('/api/log?lines=120');
   $('log').textContent = (data.lines || []).join('\n') || 'tomt';
+}
+
+// --- Grafen: vardet over tid, med bilden bakom varje punkt -------------------
+
+let grafPunkter = [];
+let grafVald = -1;
+
+async function refreshGraph() {
+  const timmar = $('grafPeriod').value;
+  const data = await api(`/api/history?hours=${timmar}&limit=2000`);
+  grafPunkter = data.punkter || [];
+  ritaGraf(grafPunkter);
+}
+
+function ritaGraf(punkter) {
+  const svg = $('graf');
+  const bredd = 800, hojd = 220;
+  const marginal = { vanster: 46, hoger: 12, uppe: 14, nere: 26 };
+  svg.innerHTML = '';
+
+  const giltiga = punkter.filter((p) => typeof p.varde === 'number');
+  if (giltiga.length === 0) {
+    $('grafInfo').textContent = punkter.length
+      ? `${punkter.length} läsningar, men inget värde kunde läsas`
+      : '— inga läsningar i perioden';
+    return;
+  }
+  $('grafInfo').textContent = `${giltiga.length} läsningar`;
+
+  const tider = punkter.map((p) => new Date(p.tid).getTime()).filter((t) => !isNaN(t));
+  const varden = giltiga.map((p) => p.varde);
+  const t0 = Math.min(...tider), t1 = Math.max(...tider);
+  let vMin = Math.min(...varden), vMax = Math.max(...varden);
+  if (vMax - vMin < 0.05) {           // ett nastan plant varde ska anda synas
+    const mitten = (vMax + vMin) / 2;
+    vMin = mitten - 0.025; vMax = mitten + 0.025;
+  }
+  const luft = (vMax - vMin) * 0.15;
+  vMin -= luft; vMax += luft;
+  if (Math.min(...varden) >= 0 && vMin < 0) vMin = 0;  // ingen negativ skala
+
+  const x = (t) => marginal.vanster + ((t - t0) / Math.max(1, t1 - t0)) * (bredd - marginal.vanster - marginal.hoger);
+  const y = (v) => hojd - marginal.nere - ((v - vMin) / (vMax - vMin)) * (hojd - marginal.uppe - marginal.nere);
+  const x0 = marginal.vanster, x1 = bredd - marginal.hoger;
+
+  const delar = [];
+  for (let i = 0; i <= 4; i++) {
+    const v = vMin + ((vMax - vMin) * i) / 4;
+    const yy = y(v);
+    delar.push(`<line class="rutnat" x1="${x0}" y1="${yy}" x2="${x1}" y2="${yy}"></line>`);
+    delar.push(`<text x="${marginal.vanster - 6}" y="${yy + 4}" text-anchor="end">${v.toFixed(2)}</text>`);
+  }
+  const forsta = new Date(t0), sista = new Date(t1);
+  delar.push(`<text x="${x0}" y="${hojd - 8}">${forsta.toLocaleString('sv-SE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</text>`);
+  delar.push(`<text x="${x1}" y="${hojd - 8}" text-anchor="end">${sista.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}</text>`);
+
+  // Linjen dras bara mellan lasningar som ligger nara varandra i tid - en lucka
+  // i historiken (tjansten ner, eller ett langt hopp) ska synas som en lucka,
+  // inte som ett rakt streck over en hel natt.
+  const LUCKA_MS = 30 * 60 * 1000;
+  const sorterade = punkter
+    .filter((p) => typeof p.varde === 'number' && !isNaN(new Date(p.tid).getTime()))
+    .sort((a, b) => new Date(a.tid) - new Date(b.tid));
+  let bit: string[] = [];
+  let forra: number | null = null;
+  const bitar: string[] = [];
+  sorterade.forEach((p) => {
+    const t = new Date(p.tid).getTime();
+    if (forra !== null && t - forra > LUCKA_MS && bit.length) {
+      bitar.push(bit.join(' '));
+      bit = [];
+    }
+    bit.push(`${x(t)},${y(p.varde)}`);
+    forra = t;
+  });
+  if (bit.length > 1) bitar.push(bit.join(' '));
+  bitar.forEach((pts) => delar.push(`<polyline class="linje" points="${pts}"></polyline>`));
+
+  punkter.forEach((p, i) => {
+    if (typeof p.varde !== 'number' || isNaN(new Date(p.tid))) return;
+    const klass = i === grafVald ? 'punkt vald' : (p.ok ? 'punkt' : 'punkt misslyckad');
+    delar.push(
+      `<circle class="${klass}" data-i="${i}" cx="${x(new Date(p.tid).getTime())}" cy="${y(p.varde)}" r="4">` +
+      `<title>${p.visas_som || p.varde} · ${String(p.tid).replace('T', ' ')}</title></circle>`
+    );
+  });
+  svg.innerHTML = delar.join('');
+
+  svg.querySelectorAll('circle.punkt').forEach((cirkel) => {
+    cirkel.addEventListener('click', () => visaPunkt(Number(cirkel.dataset.i)));
+  });
+}
+
+function visaPunkt(index) {
+  const p = grafPunkter[index];
+  if (!p) return;
+  grafVald = index;
+  $('grafBild').hidden = !p.bild_url;
+  if (p.bild_url) $('grafBild').src = p.bild_url;
+  const nar = new Date(p.tid);
+  const tid = isNaN(nar) ? String(p.tid)
+    : nar.toLocaleString('sv-SE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  $('grafText').innerHTML =
+    `<b>${p.visas_som || p.varde}</b> · ${tid}` +
+    (p.konfidens !== null && p.konfidens !== undefined ? ` · konfidens ${p.konfidens}` : '') +
+    (p.roster ? ` · ${p.roster} röster` : '') +
+    (p.ok ? '' : `<br>Ingen läsning: ${p.fel || 'okänt fel'}`);
+  ritaGraf(grafPunkter);
 }
 
 async function runTest(what, button) {
@@ -443,6 +591,7 @@ $('liveToggle').addEventListener('change', (event) => {
   if (live) {
     refreshStatus();
     refreshLog();
+    refreshGraph();
   } else {
     $('live').textContent = 'live av';
   }
@@ -451,6 +600,12 @@ $('liveToggle').addEventListener('change', (event) => {
 $('refresh').addEventListener('click', () => {
   refreshStatus();
   refreshLog();
+  refreshGraph();
+});
+
+$('grafPeriod').addEventListener('change', () => {
+  grafVald = -1;
+  refreshGraph();
 });
 
 (async function start() {
@@ -459,8 +614,10 @@ $('refresh').addEventListener('click', () => {
   await loadConfig();
   await refreshStatus();
   await refreshLog();
+  await refreshGraph();
   setInterval(() => { if (live) refreshStatus(); }, 5000);
   setInterval(() => { if (live) refreshLog(); }, 20000);
+  setInterval(() => { if (live) refreshGraph(); }, 15000);
 })();
 </script>
 </body>

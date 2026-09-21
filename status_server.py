@@ -7,6 +7,7 @@ och en enda HTML-fil.
     /                     granssnittet: live-status, senaste vardet och alla
                           installningar (samma .env som kommandoraden laser)
     /api/latest           senaste lasningen som JSON
+    /api/history          alla lasningar (underlaget for grafen)
     /api/health           lever tjansten, och nar kor nasta lasning
     /api/config           installningarna (hemliga varden lamnas aldrig ut)
     /api/run              en lasning direkt
@@ -153,6 +154,32 @@ def next_run_at(
     if target <= now:
         target += timedelta(days=1)
     return target.isoformat(timespec="seconds")
+
+
+def read_history(hours: float = 24.0, limit: int = 2000) -> dict[str, Any]:
+    """Lasningarna bakåt i tiden, for grafen i granssnittet.
+
+    Bara det granssnittet behover: tid, varde och adressen till bilden som
+    visade vardet - sa att en punkt i grafen gar att klicka pa.
+    """
+    import history
+
+    punkter: list[dict[str, Any]] = []
+    for entry in history.read(hours=hours, limit=limit):
+        punkter.append(
+            {
+                "tid": entry.get("read_at_iso") or entry.get("read_at"),
+                "varde": entry.get("numeric"),
+                "visas_som": entry.get("display"),
+                "ok": bool(entry.get("ok")),
+                "konfidens": entry.get("confidence"),
+                "roster": entry.get("votes"),
+                "bilder": entry.get("frames"),
+                "bild_url": frame_url(entry.get("bild")),
+                "fel": entry.get("error") or "",
+            }
+        )
+    return {"ok": True, "antal": len(punkter), "punkter": punkter}
 
 
 def frame_url(path: str | None) -> str | None:
@@ -347,6 +374,16 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
             if path == "/api/log":
                 match = re.search(r"lines=(\d+)", parsed.query)
                 self._send_json({"ok": True, "lines": tail_log(int(match.group(1)) if match else 200)})
+                return
+            if path == "/api/history":
+                timmar = re.search(r"hours=([\d.]+)", parsed.query)
+                antal = re.search(r"limit=(\d+)", parsed.query)
+                self._send_json(
+                    read_history(
+                        hours=float(timmar.group(1)) if timmar else 24.0,
+                        limit=int(antal.group(1)) if antal else 2000,
+                    )
+                )
                 return
             if path.startswith("/api/frames/"):
                 self._send_frame(unquote(path[len("/api/frames/") :]))

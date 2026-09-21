@@ -154,7 +154,10 @@ PRE_START_S=600
 WINDOW_S=1800
 STOP_WHEN_READY=true
 INTERVAL_S=1.5
-SAVE_FRAMES=true
+SAVE_FRAMES=false
+# Hur lange bilderna fran varje korning sparas. Beviset for den senaste
+# lasningen sparas alltid, aven om det skulle vara aldre.
+KEEP_DAYS=7
 USE_CAMERA_PROFILE=false
 
 # Home Assistant. Lamna tomt om du bara vill ha vardet i granssnittet.

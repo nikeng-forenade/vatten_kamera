@@ -44,6 +44,7 @@ def test_integrationen_har_alla_filer() -> None:
         "api.py",
         "binary_sensor.py",
         "button.py",
+        "camera.py",
         "config_flow.py",
         "const.py",
         "coordinator.py",
@@ -118,6 +119,7 @@ def test_alla_entiteter_har_ett_namn() -> None:
         ("sensor.py", "sensor"),
         ("binary_sensor.py", "binary_sensor"),
         ("button.py", "button"),
+        ("camera.py", "camera"),
     ):
         kalla = (INTEGRATION / filnamn).read_text(encoding="utf-8")
         nycklar = set(re.findall(r'_attr_translation_key = "([^"]+)"', kalla))

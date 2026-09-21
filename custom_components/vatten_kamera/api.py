@@ -49,6 +49,19 @@ class VattenKameraClient:
         """Ber tjansten lasa displayen nu (knappen i Home Assistant)."""
         return await self._request("POST", "/api/run")
 
+    async def async_image(self, url: str) -> bytes | None:
+        """Hamtar sjalva bilden (beviset) som en lasning bygger pa."""
+        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+        try:
+            async with self._session.get(url, timeout=timeout) as response:
+                if response.status != 200:
+                    raise VattenKameraError(f"{url} svarade {response.status}")
+                return await response.read()
+        except aiohttp.ClientError as exc:
+            raise VattenKameraError(f"kunde inte hamta {url}: {exc}") from exc
+        except asyncio.TimeoutError as exc:
+            raise VattenKameraError(f"{url} svarade inte inom {REQUEST_TIMEOUT} s") from exc
+
     async def _request(self, method: str, path: str) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)

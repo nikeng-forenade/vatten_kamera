@@ -820,6 +820,18 @@ def cmd_daemon(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cleanup(cfg: Config, args: argparse.Namespace) -> int:
+    """Tar bort bilder som ar aldre an KEEP_DAYS (eller --dagar)."""
+    import cleanup
+
+    dagar = args.dagar if args.dagar is not None else cfg.run.keep_days
+    resultat = cleanup.stada(dagar, dry=args.dry)
+    print(resultat.text())
+    if resultat.borttagna:
+        print("aldst forst:", ", ".join(resultat.borttagna[:5]))
+    return 0
+
+
 def cmd_status(cfg: Config, args: argparse.Namespace) -> int:
     """Startar bara webbgranssnittet - bra for att se laget utan att kora."""
     from status_server import StatusServer
@@ -918,6 +930,11 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="en komplett korning direkt")
 
     sub.add_parser("status", help="starta bara webbgranssnittet").set_defaults(func=cmd_status)
+
+    stada = sub.add_parser("cleanup", help="ta bort gamla bilder fran korningarna")
+    stada.add_argument("--dagar", type=int, help="behall sa har manga dygn (annars KEEP_DAYS)")
+    stada.add_argument("--dry", action="store_true", help="visa bara vad som skulle tas bort")
+    stada.set_defaults(func=cmd_cleanup)
     run.add_argument("--seconds", type=float, help="langd pa lasfonstret")
     run.add_argument("--utan-lampa", action="store_true")
     run.add_argument("--utan-sparning", action="store_true")

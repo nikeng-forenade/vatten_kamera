@@ -137,6 +137,44 @@ def test_loggen_ger_sista_raderna(server: StatusServer) -> None:
     assert data["lines"] == ["rad tva"]
 
 
+def test_historiken_ger_punkter_for_grafen(
+    server: StatusServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Grafen ritas ur /api/history - varje punkt ska ha varde, tid och bild."""
+    import history
+
+    bild = status_server.CAPTURES_DIR / "runs" / "graf.jpg"
+    bild.parent.mkdir(parents=True, exist_ok=True)
+    bild.write_bytes(b"\xff\xd8\xff\xd9")
+    fil = tmp_path / "history.jsonl"
+    history.write(
+        [
+            {
+                "read_at": "2026-09-21T18:00:00",
+                "numeric": 0.57,
+                "display": "0.57",
+                "ok": True,
+                "confidence": 0.83,
+                "votes": 3,
+                "frames": 19,
+                "bild": str(bild),
+                "error": "",
+            }
+        ],
+        path=fil,
+    )
+    monkeypatch.setattr(history, "HISTORY_FILE", fil)
+
+    status, data = hamta(server, "/api/history?hours=24")
+
+    assert status == 200
+    assert data["antal"] == 1
+    punkt = data["punkter"][0]
+    assert punkt["varde"] == 0.57
+    assert punkt["visas_som"] == "0.57"
+    assert punkt["bild_url"] == "/api/frames/runs/graf.jpg"
+
+
 def test_okand_vag_ger_404(server: StatusServer) -> None:
     status, data = hamta(server, "/api/finns-inte")
 

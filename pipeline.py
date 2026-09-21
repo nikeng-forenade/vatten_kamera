@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+import history
 from camera import CameraError, HikvisionCamera
 from config import (
     CAPTURES_DIR,
@@ -157,8 +158,27 @@ class NightlyRunner:
         # Hur olika tva bilder far vara for att anses visa samma varde.
         self.similarity_threshold = cfg.run.group_threshold
         self.use_camera_profile = cfg.run.use_camera_profile
+        # Tidpunkten for senaste stadningen av gamla bilder.
+        self._senast_stadat = 0.0
 
     # --- Kameralage -------------------------------------------------------
+
+    def _stada_bilder(self, *, var_timme: float = 1.0) -> None:
+        """Tar bort bilder som ar aldre an KEEP_DAYS.
+
+        Gors hogst en gang i timmen: korningen startar anda med nagra minuters
+        mellanrum, och att lista katalogerna varje gang ar onodigt.
+        """
+        nu = time.time()
+        if nu - self._senast_stadat < var_timme * 3600.0:
+            return
+        self._senast_stadat = nu
+        try:
+            import cleanup
+
+            cleanup.stada(self.cfg.run.keep_days)
+        except OSError as exc:  # noqa: BLE001 - en stadning far aldrig stoppa lasningen
+            log.warning("kunde inte stada gamla bilder: %s", exc)
 
     def _apply_camera_profile(self) -> str:
         """Lanar kameran till lasprofilen och returnerar laget som ska tillbaka.
@@ -421,6 +441,7 @@ class NightlyRunner:
 
         log.info("startar korning (version %s), fonster %.0f s", VERSION, duration)
         set_state(running=True, started=started.isoformat(timespec="seconds"))
+        self._stada_bilder()
 
         try:
             mqtt_up, rest_up = self._open_publishers()
@@ -547,7 +568,10 @@ class NightlyRunner:
             # Senaste lasningen pa disk, for vardestjansten och Home Assistant.
             # Skrivs aven nar lasningen misslyckades, sa att HA ser att nagot ar
             # fel i stallet for att visa ett gammalt varde.
+            status = summary.to_status(unit=self.cfg.mqtt.unit, decimals=self.cfg.reader.decimals)
             write_status(summary, unit=self.cfg.mqtt.unit, decimals=self.cfg.reader.decimals)
+            # ... och i historiken, som granssnittets graf ritas ur.
+            history.append(status)
 
             if run_dir is not None:
                 run_dir.mkdir(parents=True, exist_ok=True)

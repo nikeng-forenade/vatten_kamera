@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 
 ROOT = Path(__file__).resolve().parent
 
@@ -77,6 +77,8 @@ STATUS_ALLOW_RESTART = _get_bool("STATUS_ALLOW_RESTART", True)
 INTERVAL_PAUSE_S = 5.0
 # Senaste lasningen, sa att svaret finns kvar aven efter en omstart.
 LATEST_FILE = Path(_get("LATEST_FILE") or DATA_DIR / "latest.json")
+# Alla lasningar, en per rad - underlaget for grafen i granssnittet.
+HISTORY_FILE = Path(_get("HISTORY_FILE") or DATA_DIR / "history.jsonl")
 # Loggfilen som granssnittet visar de sista raderna ur.
 LOG_FILE = Path(_get("LOG_FILE") or DATA_DIR / "vatten_kamera.log")
 
@@ -172,6 +174,9 @@ class RunConfig:
     lamp_cooldown_s: float = 1.0
     # Spara bilderna fran korningen (bevis vid felsokning).
     save_frames: bool = True
+    # Hur lange bilderna fran varje korning sparas. Beviset for den senaste
+    # korningen sparas alltid, aven om det skulle vara aldre.
+    keep_days: int = 7
     # Kameran lanas till lasprofilen (camera_profile.json) strax innan lasningen
     # och laggs tillbaka direkt efter, sa att den inte lamnas i ett morkt lage.
     use_camera_profile: bool = True
@@ -285,6 +290,7 @@ def load_config() -> Config:
         lamp_warmup_s=_get_float("LAMP_WARMUP_S", 2.0),
         lamp_cooldown_s=_get_float("LAMP_COOLDOWN_S", 1.0),
         save_frames=_get_bool("SAVE_FRAMES", True),
+        keep_days=_get_int("KEEP_DAYS", 7),
         use_camera_profile=_get_bool("USE_CAMERA_PROFILE", True),
         publish_to=_publish_target(_get("PUBLISH_TO", "auto")),
         save_only_success=_get_bool("SAVE_ONLY_SUCCESS", False),

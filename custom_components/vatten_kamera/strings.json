@@ -56,6 +56,11 @@
       "las_nu": {
         "name": "Read now"
       }
+    },
+    "camera": {
+      "senaste_bild": {
+        "name": "Last image"
+      }
     }
   }
 }

@@ -147,8 +147,10 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `main.py diagnose` | Säger till om kameran står nära nog |
 | `main.py mqtt-test --value 1050` | Publicerar ett provvärde så sensorerna dyker upp i HA |
 | `main.py run` | En komplett körning direkt (lampa, läsning, publicering) |
-| `main.py daemon` | Håller tjänsten igång enligt `MODE` (natt, intervall eller manuellt) |
+| `main.py daemon` | Håller tjänsten igång enligt `MODE` (intervall, manuellt eller natt) |
 | `main.py status` | Startar bara webbgränssnittet på `STATUS_PORT` |
+| `main.py cleanup --dagar 7` | Tar bort bilder äldre än 7 dygn (`--dry` visar utan att ta bort) |
+| `tools/import_history.py` | Fyller grafen med körningar som redan ligger på disk |
 
 ## Inställningar i `.env`
 
@@ -177,7 +179,8 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `HA_LIGHT_ENTITY` | tom | Lampan vid pumpen. **Tom = ingen lampstyrning** |
 | `MQTT_HOST`, `MQTT_PORT` | – | MQTT-broker |
 | `CLIP_BOTTOM` | `0.0` | Andel av utsnittets höjd som klipps bort nedtill (reflektionen) |
-| `SAVE_FRAMES` | `true` | Sparar alla bilder från körningen (bilden som lästes sparas alltid) |
+| `SAVE_FRAMES` | `false` | Sparar **alla** sidor från körningen. Bevisbilden sparas alltid |
+| `KEEP_DAYS` | `7` | Hur många dygn bilderna sparas (beviset för senaste läsningen sparas alltid) |
 | `STATUS_PORT` | `8099` | Porten för webbgränssnittet |
 | `STATUS_BIND` | `0.0.0.0` | Adressen webbgränssnittet lyssnar på |
 | `STATUS_LIVE` | `true` | `false` = sidan uppdaterar sig bara när du ber om det |
@@ -276,6 +279,7 @@ Adressen står i webbgränssnittets nederkant, färdig att kopiera.
 | `sensor.vatten_kamera_status` | `Last` / `Laser nu` / `Ingen lasning` / `Okontaktbar` |
 | `binary_sensor.vatten_kamera_lasning_ok` | Gick senaste läsningen bra? |
 | `button.vatten_kamera_las_nu` | Startar en läsning direkt (även i läget `manuell`) |
+| `camera.vatten_kamera_senaste_bild` | Bilden värdet lästes ur — klicka för att se displayen |
 
 Är tjänsten nere blir entiteterna **otillgängliga** i stället för att visa ett gammalt
 värde — ett inaktuellt "liter kvar" är värre än inget. Hur ofta värdet hämtas ställs in
@@ -292,6 +296,49 @@ Använder du HACS-integrationen ska tjänsten **inte** publicera något själv: 
 | `rest` | Tjänsten skickar värdet direkt till HA:s API (`HA_BASE_URL` + `HA_TOKEN`) |
 | `mqtt` | Du har en MQTT-broker |
 | `auto` | MQTT om brokern svarar, annars HA:s API. Standard — men blir fel om ingen av dem finns |
+
+## Bilder, historik och grafen
+
+Varje läsning sparar **en bild**: utsnittet av displayen som värdet kom från. Det är
+beviset — både webbgränssnittet och `camera.vatten_kamera_senaste_bild` i Home Assistant
+visar det, och attributen `bild` och `visas_som` pekar ut det.
+
+| Fil | Vad den innehåller |
+|---|---|
+| `captures/runs/<tid>/` | Bevisbilden (och hela serien om `SAVE_FRAMES=true`), plus `summary.json` med körningen steg för steg |
+| `latest.json` | Senaste läsningen — det HA-integrationen läser |
+| `history.jsonl` | Alla läsningar, en per rad. Underlaget för grafen |
+| `vatten_kamera.log` | Loggen som gränssnittet visar |
+
+**Bilderna sparas i `KEEP_DAYS` dygn (standard 7).** Städningen körs automatiskt högst en
+gång i timmen och tar bara bort kataloger inuti `captures/runs/` som heter som en körning
+(`20260921_195427`) — och den **senaste körningen sparas alltid**, så det finns alltid en
+bild kvar även om tjänsten stått still. Vill du se vad som skulle tas bort:
+
+```powershell
+run.cmd main.py cleanup --dagar 7 --dry
+```
+
+Ungefärlig storlek: en läsning var femte minut ger ~90 MB per dygn med bara bevisbilden
+(`SAVE_FRAMES=false`), alltså ~600 MB för sju dygn. Slår du på `SAVE_FRAMES` blir det
+flera gånger mer — den är till för att kunna mäta om avläsaren, inte för drift.
+
+### Grafen i gränssnittet
+
+Under värdet ritas **värdets utveckling** (6 timmar till 30 dygn). Klicka på en punkt i
+grafen så visas **bilden som just den läsningen byggde på**, tillsammans med tid, konfidens
+och antal röster. Linjen bryts där det saknas läsningar — en lucka betyder att tjänsten
+varit nere, inte att värdet gått rakt ned.
+
+Har du kört tjänsten innan historiken fanns, fyll på den från de sparade körningarna:
+
+```powershell
+run.cmd tools/import_history.py
+```
+
+`history.jsonl` håller de senaste 5 000 läsningarna. I Home Assistant behövs ingen egen
+historik: sensorn `sensor.vatten_kamera_niva` loggas av HA:s egen recorder, och
+tidsstämpeln i `sensor.vatten_kamera_senast_last` visar när värdet är från.
 
 ## Kamerans bildinställningar
 
