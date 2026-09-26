@@ -88,7 +88,7 @@ if [[ ${#POS_ARGS[@]} -eq 0 ]] && [[ -z "$INSTALL_OPTS" ]] && [[ -z "$CALIBRATIO
   echo "  +-------------------------------------------+"
   echo ""
   echo "  Standard: DHCP, 1 karna, 512 MB, granssnitt pa 8099"
-  echo "  Anpassat: egen IP, kamerans losenord, Home Assistant"
+  echo "  Anpassat: egen IP, laslaget, kamerans losenord, Home Assistant"
   echo ""
   read -r -p "  Standard [d] eller anpassat [a]? (d/a): " MODE
   echo ""
@@ -103,10 +103,19 @@ if [[ ${#POS_ARGS[@]} -eq 0 ]] && [[ -z "$INSTALL_OPTS" ]] && [[ -z "$CALIBRATIO
     fi
     read -r -p "  Kamerans adress: " input
     INSTALL_OPTS="$INSTALL_OPTS --camera-ip ${input}"
+    read -r -p "  Kamerans anvandare [admin]: " input
+    INSTALL_OPTS="$INSTALL_OPTS --camera-user ${input:-admin}"
     read -r -p "  Kamerans losenord: " input
     [[ -n "$input" ]] && INSTALL_OPTS="$INSTALL_OPTS --camera-password $input"
-    read -r -p "  Klockslag for lasningen [02:05:00]: " input
-    INSTALL_OPTS="$INSTALL_OPTS --run-at ${input:-02:05:00}"
+    read -r -p "  Laslaget - intervall, manuell eller natt [intervall]: " input
+    LASLAGE="${input:-intervall}"
+    INSTALL_OPTS="$INSTALL_OPTS --mode $LASLAGE"
+    if [[ "$LASLAGE" == "natt" ]]; then
+      # Bara natt-laget bryr sig om klockslaget - annars laser den ju hela tiden
+      # (och vardet tas anda fran sidan efter att displayen visat 02:00).
+      read -r -p "  Klockslag for nattlasningen [02:05:00]: " input
+      INSTALL_OPTS="$INSTALL_OPTS --run-at ${input:-02:05:00}"
+    fi
     read -r -p "  Kalibreringsfil pa den har maskinen (blank = kalibrera i containern): " input
     [[ -n "$input" ]] && CALIBRATION="$input"
     read -r -p "  Home Assistant-adress (blank = hoppa over): " input
@@ -187,7 +196,7 @@ for _ in $(seq 1 30); do
 done
 
 echo "Installerar grundpaket..."
-pct exec "$CT_ID" -- bash -c "apt-get update -qq && apt-get install -y -qq curl git ca-certificates >/dev/null"
+pct exec "$CT_ID" -- env LC_ALL=C bash -c "apt-get update -qq && apt-get install -y -qq curl git ca-certificates >/dev/null"
 
 echo "Skickar in installationsskriptet..."
 pct push "$CT_ID" "$INSTALL_SCRIPT" /root/install.sh
@@ -204,9 +213,9 @@ fi
 
 echo "Kor installationen (det tar nagra minuter - Python och OpenCV ska byggas)..."
 if [[ -n "$INSTALL_OPTS" ]]; then
-  pct exec "$CT_ID" -- bash /root/install.sh $INSTALL_OPTS
+  pct exec "$CT_ID" -- env LC_ALL=C bash /root/install.sh $INSTALL_OPTS
 else
-  pct exec "$CT_ID" -- bash /root/install.sh
+  pct exec "$CT_ID" -- env LC_ALL=C bash /root/install.sh
 fi
 
 IP_ADDR=$(pct exec "$CT_ID" -- ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)

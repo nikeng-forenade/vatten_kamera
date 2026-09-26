@@ -27,6 +27,10 @@ fi
 
 cd "$APP_DIR"
 
+# Samma sak har som i install.sh: skalets LANG finns inte i containern och ger
+# locale-varningar som ser ut som fel men inte ar det.
+export LC_ALL=C
+
 FORRA=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
 echo "=== Vattenkamera - uppdatering ==="
 echo "Nuvarande version: $FORRA"

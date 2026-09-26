@@ -306,3 +306,27 @@ def test_trasig_env_stoppar_inte_tjansten(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert instans.reload() is False
     assert instans.cfg is grund  # de gamla installningarna galler vidare
+
+
+def test_versiontexten_namner_klockslaget_bara_i_lage_natt() -> None:
+    """RUN_AT ar bara en vackningstid i lage natt.
+
+    Vardet tas anda fran sidan efter att displayen visat 02:00, sa att skriva
+    "kor kl 02:05" i lage intervall fick det att se ut som att lasningen vantar
+    pa en klockslag.
+    """
+    from main import _lasbeskrivning
+
+    intervall = SimpleNamespace(run=RunConfig(mode="intervall", every_minutes=10))
+    text = _lasbeskrivning(intervall)
+    assert "02:05" not in text
+    assert "var 10 minut" in text
+
+    hela_tiden = SimpleNamespace(run=RunConfig(mode="intervall", every_minutes=0))
+    assert "hela tiden" in _lasbeskrivning(hela_tiden)
+
+    manuell = SimpleNamespace(run=RunConfig(mode="manuell"))
+    assert "Las nu" in _lasbeskrivning(manuell)
+
+    natt = SimpleNamespace(run=RunConfig(mode="natt", run_at="02:05:00"))
+    assert "02:05" in _lasbeskrivning(natt)

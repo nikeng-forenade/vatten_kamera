@@ -829,9 +829,22 @@ installerar du den först med `apt-get install -y nano`.
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/nikeng-forenade/vatten_kamera/main/lxc/proxmox-create.sh)"
 ```
 
+Installationen tar några minuter och **ser nästan stilla ut** medan paketen och Python-miljön
+installeras — avbryt inte. Blir den ändå avbruten (eller vill du köra om) finns containern
+kvar, och installationen görs om från Proxmox-skalet:
+
+```bash
+pct exec 210 -- bash /root/install.sh
+```
+
+Skriptet ligger redan i containern och lämnar `.env` och `data/` i fred. Varningar om
+`locale` eller `perl` i början är ofarliga — de kommer från att skalets `LANG` inte finns i
+den nya containern.
+
 Utan argument startar den en **interaktiv guide** som frågar efter container-ID, nätverk,
-kamerans adress och lösenord, kalibreringsfil (valfritt) och Home Assistant — svara bara på
-frågorna, så är allt klart. Allt går också att skicka in direkt:
+kamerans adress och lösenord, **läsläget** (`intervall` som standard — frågan om klockslag
+kommer bara om du väljer `natt`), kalibreringsfil (valfritt) och Home Assistant — svara bara
+på frågorna, så är allt klart. Allt går också att skicka in direkt:
 
 ```bash
 bash proxmox-create.sh 210 local-lvm vmbr0 192.168.1.50/24 192.168.1.1 \

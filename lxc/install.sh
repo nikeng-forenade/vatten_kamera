@@ -72,15 +72,32 @@ fi
 
 echo "=== Vattenkamera - installation ==="
 echo "Lage:        $MODE"
-echo "Klockslag:   $RUN_AT"
-if [[ "$MODE" == "intervall" ]]; then
-  echo "Var:         $EVERY_MINUTES minut"
+case "$MODE" in
+  intervall)
+    if [[ "$EVERY_MINUTES" == "0" ]]; then
+      echo "Laser:       hela tiden (nasta lasning strax efter den forra)"
+    else
+      echo "Laser:       var $EVERY_MINUTES minut"
+    fi
+    ;;
+  manuell) echo "Laser:       bara nar du trycker 'Las nu'" ;;
+  natt)    echo "Laser:       en gang per dygn strax innan $RUN_AT (datorns tid)" ;;
+esac
+if [[ -n "$CAMERA_IP" ]]; then
+  echo "Kamera:      $CAMERA_IP (anvandare ${CAMERA_USER:-tom - fylls i i granssnittet})"
+else
+  echo "Kamera:      fylls i i granssnittet efterat"
 fi
-echo "Kamera:      $CAMERA_IP (anvandare $CAMERA_USER)"
 echo "Granssnitt:  port $STATUS_PORT"
+echo ""
+echo "Det har tar nagra minuter (Python och OpenCV ska in) och ser nastan stilla ut"
+echo "medan paketen installeras - avbryt inte."
 echo ""
 
 # --- Paket -----------------------------------------------------------------
+# Skalet som startade installationen har ofta ett LANG som inte finns i
+# containern; det ger locale- och perl-varningar som ser ut som fel men inte ar det.
+export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip git curl \
@@ -138,11 +155,12 @@ COLOR_CHANNEL=b
 THRESHOLD=250
 
 # Rostningen och tiderna.
-# RUN_AT ar DATORNS tid for pumpens 02:00 (pumpens klocka gar efter: matt
-# 2026-09-20 visade den 15:15 nar datorn var 15:20). Klockslaget ar bara en
-# startpunkt - korningen tittar pa displayen tills den visar 02:00 och tar
-# vardet fran sidan efter den, sedan slutar den. Marginalen pa tio minuter
-# tacker att klockan gar olika mycket efter.
+# RUN_AT anvands bara i lage natt och ar da DATORNS tid for pumpens 02:00
+# (pumpens klocka gar efter: matt 2026-09-20 visade den 15:15 nar datorn var
+# 15:20). Klockslaget ar bara en startpunkt - korningen tittar pa displayen
+# tills den visar 02:00 och tar vardet fran sidan efter den, sedan slutar den.
+# Marginalen pa tio minuter tacker att klockan gar olika mycket efter.
+# I lage intervall (standard) anvands inte RUN_AT alls.
 MIN_CONFIDENCE=0.35
 MIN_AGREEMENT=3
 # intervall = laser hela tiden (var EVERY_MINUTES minut, 0 = sa snart den forra

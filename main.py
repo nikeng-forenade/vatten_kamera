@@ -68,9 +68,25 @@ def cmd_version(cfg: Config, _args: argparse.Namespace) -> int:
     print(f"kamera      : {cfg.camera.ip} (kanal {cfg.camera.channel})")
     print(f"lampa       : {cfg.ha.light_entity or '(inte konfigurerad)'}")
     print(f"mqtt        : {'ja' if cfg.mqtt.enabled else 'nej'} {cfg.mqtt.host or ''}")
-    print(f"kor kl      : {cfg.run.run_at}  fonster {cfg.run.window_s:.0f} s")
+    print(f"laser       : {_lasbeskrivning(cfg)}")
     print(f"kalibrering : {'finns' if cfg.calibration_file.exists() else 'saknas'}")
     return 0
+
+
+def _lasbeskrivning(cfg: Config) -> str:
+    """Hur lasningen ar schemalagd.
+
+    Klockslaget (RUN_AT) galler bara i lage natt, och aven da ar det bara en
+    vackningstid: vardet tas alltid fran sidan efter att displayen visat 02:00.
+    Darfor namns inte RUN_AT har i de andra lagena.
+    """
+    if cfg.run.mode == "manuell":
+        return "bara nar du trycker 'Las nu'"
+    if cfg.run.mode == "intervall":
+        if cfg.run.every_minutes <= 0:
+            return "hela tiden (nasta lasning strax efter den forra)"
+        return f"var {cfg.run.every_minutes:g} minut"
+    return f"en gang per dygn strax innan {cfg.run.run_at} (datorns tid)"
 
 
 def cmd_probe(cfg: Config, _args: argparse.Namespace) -> int:
