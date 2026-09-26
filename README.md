@@ -758,10 +758,8 @@ Tjänsten är gjord för att köra i en liten headless Debian-container. Ingen G
 en avläsning kostar ~144 ms CPU (mätt med `tools/bench_reading.py`), alltså några sekunder
 per dygn, och ~60 MB minne.
 
-```bash
-# I containern, som root:
-bash lxc/install.sh --camera-password '...' --mode natt --run-at 02:05:00
-```
+Containern skapas och installeras antingen med **ett kommando från Proxmox-skalet** (längst
+ner) eller **inifrån containern**. Båda gör samma sak.
 
 | Fil | Vad den gör |
 |---|---|
@@ -775,6 +773,47 @@ i `/opt/vattenkamera/data` — så en uppdatering av koden rör inte installatio
 
 Har du inte fyllt i kameran vid installationen gör du det i gränssnittet efteråt — se
 [Lägga in kameran](#lägga-in-kameran). Samma gäller kalibreringen.
+
+#### Inne i containern
+
+Från Proxmox-skalet kommer du in i containern så här:
+
+```bash
+pct enter 210                              # interaktivt skal (lämna med exit)
+pct exec 210 -- ip -4 addr show eth0       # bara containerns adress
+pct exec 210 -- systemctl status vatten-kamera   # ett enskilt kommando
+```
+
+Samma sak går med `ssh root@<containerns adress>` om du lagt in en nyckel.
+
+`install.sh` hämtar koden själv och är gjord för att kunna köras om — den lämnar `.env`
+och `data/` i fred:
+
+```bash
+curl -fsSL -o /root/install.sh \
+  https://raw.githubusercontent.com/nikeng-forenade/vatten_kamera/main/lxc/install.sh
+bash /root/install.sh --camera-ip <kamerans adress> --camera-user admin \
+  --camera-password '...' --unit l
+```
+
+Vill du fylla i kameran i gränssnittet i stället räcker `bash /root/install.sh`.
+
+Vanliga kommandon inne i containern (stå i `/opt/vattenkamera`, `cd /opt/vattenkamera`):
+
+| Vad | Kommando |
+|---|---|
+| Lever tjänsten? | `systemctl status vatten-kamera` |
+| Följ loggen | `journalctl -u vatten-kamera -f` |
+| Version och vägar | `.venv/bin/python main.py version` |
+| Testa kameran | `.venv/bin/python main.py probe` |
+| Läs en gång | `.venv/bin/python main.py read --seconds 20 --spara` |
+| Mät om displayen | `.venv/bin/python main.py calibrate --frames 16 --save` |
+| Starta om tjänsten | `systemctl restart vatten-kamera` |
+| Uppdatera koden | `bash <(curl -fsSL https://raw.githubusercontent.com/nikeng-forenade/vatten_kamera/main/lxc/update.sh)` |
+
+`.env` redigeras enklast i **gränssnittet** (`http://<containerns adress>:8099/` →
+Inställningar) — `nano` följer inte med installationen, vill du redigera filen för hand
+installerar du den först med `apt-get install -y nano`.
 
 #### Ett kommando från Proxmox-skalet
 
