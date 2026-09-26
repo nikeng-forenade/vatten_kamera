@@ -117,53 +117,88 @@ def flode_larm(
     path: Path | None = None,
     nu: datetime | None = None,
 ) -> dict[str, Any]:
-    """Har flodet legat over troskeln hela tiden de senaste minuterna?
+    """Har flodet legat over troskeln i en obruten svit av lasningar sen `minuter`?
 
-    Ett flode over troskeln en enstaka lasning ar normalt - pumpen kan kora en
-    stund. Ligger det kvar varje lasning i minst `minuter` minuter rinner det
-    hela tiden, och da ar det vart att larma (lackage eller oppen ventil).
+    Ett flode over troskeln en enstaka lasning ar normalt: pumpen kan kora en
+    stund, och fyller man ett badkar rinner det i en kvart. Larmet kravs darfor av
+    att *varje* lasning i en obruten svit ligger over troskeln och att sviten
+    spanner over minst `minuter` - da tas det ut vatten hela tiden, och det ar
+    vart att larma (lackage eller oppen ventil).
 
-    Kraver minst tva lasningar med kant flode i fonstret, och att den aldsta av
-    dem ligger nara hela fonstret bort - annars kunde en enda farsk lasning
-    larma direkt. Utan de tva sparrarna skulle ett kort avbrott i lasningen se
-    ut som ett lackage.
+    Sviten mats i tid, inte i antal lasningar, sa att den fungerar oavsett hur
+    ofta tjansten laser: 30 minuter ar tre lasningar var tionde minut eller
+    femton varannan. En lasning utan kant flode bryter inte sviten - den sager
+    ingenting om vattnet - men ett uppehall mellan lasningarna som ar langre an
+    sjalva kravet (efter ett avbrott) gor att sviten inte gar att bedoma.
     """
     nu = nu or datetime.now()
-    fonster = max(1.0, minuter / 60.0)
-    grans = nu - timedelta(minutes=minuter)
-
+    # Titta dubbelt sa langt bak som kravet: dels for att kunna skriva hur lange
+    # det runnit ("minst X minuter"), dels for att sviten ska kunna bli langre an
+    # kravet nar lasningarna kommer tatare an en gang per kvart.
     varden: list[tuple[datetime, float]] = []
-    for rad in read(hours=fonster * 2, path=path):
+    for rad in read(hours=max(1.0, minuter * 2) / 60.0, path=path):
         tid = _tid(rad)
         flode = rad.get("flow_numeric")
-        if tid is None or tid < grans or not isinstance(flode, (int, float)):
+        if tid is None or not isinstance(flode, (int, float)):
             continue
         varden.append((tid, float(flode)))
 
-    if len(varden) < 2:
+    if not varden:
+        return {"larm": False, "flode": None, "antal": 0, "text": "inget kant flode an"}
+
+    nyast = varden[-1]
+    if nyast[1] < troskel:
         return {
             "larm": False,
-            "flode": varden[-1][1] if varden else None,
-            "antal": len(varden),
-            "text": "for fa lasningar med kant flode an",
+            "flode": nyast[1],
+            "antal": 0,
+            "text": f"flodet har varit under {troskel:g}",
+        }
+    gammal = (nu - nyast[0]).total_seconds() / 60.0
+    if gammal > minuter:
+        return {
+            "larm": False,
+            "flode": nyast[1],
+            "antal": 0,
+            "text": f"senaste lasningen ar {gammal:.0f} min gammal",
         }
 
-    lagst = min(varde for _, varde in varden)
-    hogst = max(varde for _, varde in varden)
-    tackt = (nu - min(tid for tid, _ in varden)).total_seconds() / 60.0
-    svar = {"flode": varden[-1][1], "antal": len(varden)}
+    # Sviten: alla lasningar bakat sa lange de ligger over troskeln.
+    svit = [nyast]
+    for punkt in reversed(varden[:-1]):
+        if punkt[1] < troskel:
+            break
+        svit.append(punkt)
+    svit.reverse()
 
-    if lagst < troskel:
-        return {**svar, "larm": False, "text": f"flodet har varit under {troskel:g}"}
-    if tackt < minuter * 0.8:
+    lagst = min(flode for _, flode in svit)
+    hogst = max(flode for _, flode in svit)
+    stracka = (svit[-1][0] - svit[0][0]).total_seconds() / 60.0
+    lucka = max(
+        ((senare[0] - tidigare[0]).total_seconds() / 60.0 for tidigare, senare in zip(svit, svit[1:])),
+        default=0.0,
+    )
+    svar = {"flode": nyast[1], "antal": len(svit), "minuter": round(stracka)}
+
+    if len(svit) < 2:
+        return {**svar, "larm": False, "text": "bara en lasning med kant flode an"}
+    if stracka < minuter:
         return {
             **svar,
             "larm": False,
-            "text": f"flodet har varit over {troskel:g} i {tackt:.0f} min (kortare an {minuter:g})",
+            "text": f"flodet har legat pa {lagst:.2f} i {stracka:.0f} min (kortare an {minuter:g})",
+        }
+    if lucka > minuter:
+        return {
+            **svar,
+            "larm": False,
+            "text": f"for glest mellan lasningarna ({lucka:.0f} min utan lasning)",
         }
 
+    # Nar sviten anda bak i underlaget har den pagatt langre an vi kan se.
+    minst = "minst " if svit[0] is varden[0] else ""
     return {
         **svar,
         "larm": True,
-        "text": f"flodet har legat pa {lagst:.2f}-{hogst:.2f} i {tackt:.0f} minuter",
+        "text": f"flodet har legat pa {lagst:.2f}-{hogst:.2f} i {minst}{stracka:.0f} min",
     }

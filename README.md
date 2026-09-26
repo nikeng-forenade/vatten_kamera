@@ -483,16 +483,28 @@ Flödet hamnar i `latest.json`, i historiken, som en egen linje i grafen och i H
 
 ### Larmet
 
-Ett flöde över `FLOW_WARN` **en enstaka gång** är normalt — pumpen kan ju köra en stund.
-Ligger det däremot kvar **varje läsning** i `FLOW_WARN_MINUTES` minuter rinner det hela
-tiden, och då:
+Ett flöde över `FLOW_WARN` **en enstaka gång** är normalt: pumpen kan ju köra en stund, och
+fyller man ett badkar rinner det i en kvart. Larmet kräver därför att **varje läsning** i en
+obruten följd ligger över tröskeln och att följden spänner över minst `FLOW_WARN_MINUTES`
+minuter — då tas det ut vatten hela tiden, och då:
 
-* visas en varning i gränssnittet: *flödet har legat på 0,12–0,13 i 31 minuter*
+* visas en varning i gränssnittet: *flödet har legat på 0,12–0,13 i 33 min*
 * blir `binary_sensor.vatten_kamera_lackage` **på** i Home Assistant — larma på den
 
-Går flödessidan inte att läsa publiceras **inget** flöde (hellre inget än ett felaktigt),
-och ett flöde som saknas kan aldrig bli ett larm. Vill du bara läsa nivån: sätt
-`READ_FLOW=false` eller `FLOW_EXTRA_S=0`.
+Längden mäts i **tid mellan läsningarna**, inte i antal: 30 minuter är tre läsningar var
+tionde minut eller femton varannan. Med standardtakten (var tionde minut) betyder det att
+alarmet tänds efter drygt en halvtimmes oavbrutet uttag och **slocknar vid första läsningen
+med stilla vatten** — det står alltså kvar så länge det rinner. Ett badkar, en dusch eller
+en tvätt hinner aldrig bli ett larm.
+
+Två spärrar gör att larmet hellre är tyst än fel:
+
+* **Ett glapp i läsningarna** (t.ex. efter ett avbrott) gör att följden inte går att bedöma —
+  då larmas inget: *för glest mellan läsningarna (35 min utan läsning)*.
+* **Flödet måste vara känt.** Går flödessidan inte att läsa publiceras **inget** flöde
+  (hellre inget än ett felaktigt), och ett flöde som saknas kan aldrig bli ett larm.
+
+Vill du bara läsa nivån: sätt `READ_FLOW=false` eller `FLOW_EXTRA_S=0`.
 
 ### Mätt mot displayen (2026-09-26)
 

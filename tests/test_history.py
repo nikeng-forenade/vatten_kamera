@@ -114,6 +114,67 @@ def test_flode_larm_tal_utan_flode(tmp_path: Path) -> None:
     assert larm["flode"] is None
 
 
+def test_flode_larm_med_tio_minuters_takt(tmp_path: Path) -> None:
+    """Larmet ska ligga kvar hela tiden - inte blinka i takt med lasningarna.
+
+    Tjansten laser var tionde minut. Larmvillkoret kravde forr att den ALDSTA
+    lasningen i fonstret var 24 av 30 minuter gammal; med en tionde minuters takt
+    ar den som mest 20, sa larmet kunde aldrig tandas (och hade det tands hade
+    det slocknat igen vid nasta lasning).
+    """
+    fil = tmp_path / "history.jsonl"
+    for sekunder in range(0, 11 * 60, 30):          # hela vagen mellan tva lasningar
+        nu = datetime.now().replace(microsecond=0) - timedelta(seconds=sekunder)
+        history.write([flode_rad(nu, m, 0.20) for m in range(0, 6 * 60, 10)], path=fil)
+
+        assert history.flode_larm(troskel=0.05, minuter=30.0, path=fil, nu=nu)["larm"] is True
+
+    larm = history.flode_larm(troskel=0.05, minuter=30.0, path=fil, nu=nu)
+    assert larm["antal"] >= 4
+    assert larm["minuter"] >= 30
+    assert "0.20" in larm["text"]
+
+
+def test_inget_flode_larm_av_ett_badkar(tmp_path: Path) -> None:
+    """Fyller man ett badkar rinner det i en kvart - det ar inget lackage."""
+    fil = tmp_path / "history.jsonl"
+    nu = datetime.now().replace(microsecond=0)
+    history.write(
+        [flode_rad(nu, m, 0.30 if m <= 20 else 0.00) for m in range(0, 6 * 60, 10)], path=fil
+    )
+
+    larm = history.flode_larm(troskel=0.05, minuter=30.0, path=fil, nu=nu)
+
+    assert larm["larm"] is False
+    assert "kortare an 30" in larm["text"]
+
+
+def test_flode_larm_slacks_nar_flodet_slutar(tmp_path: Path) -> None:
+    """Sa snart en lasning visar stilla vatten ska larmet slockna."""
+    fil = tmp_path / "history.jsonl"
+    nu = datetime.now().replace(microsecond=0)
+    history.write([flode_rad(nu, m, 0.20) for m in range(0, 6 * 60, 10)], path=fil)
+    assert history.flode_larm(troskel=0.05, minuter=30.0, path=fil, nu=nu)["larm"] is True
+
+    history.write([flode_rad(nu, 0, 0.00), *[flode_rad(nu, m, 0.20) for m in range(10, 6 * 60, 10)]], path=fil)
+    larm = history.flode_larm(troskel=0.05, minuter=30.0, path=fil, nu=nu)
+
+    assert larm["larm"] is False
+    assert "under 0.05" in larm["text"]
+
+
+def test_inget_flode_larm_nar_lasningarna_ar_for_glest(tmp_path: Path) -> None:
+    """Efter ett avbrott gar sviten inte att bedoma - hellre tyst an fel."""
+    fil = tmp_path / "history.jsonl"
+    nu = datetime.now().replace(microsecond=0)
+    history.write([flode_rad(nu, m, 0.20) for m in (0, 10, 20, 55, 58)], path=fil)
+
+    larm = history.flode_larm(troskel=0.05, minuter=30.0, path=fil, nu=nu)
+
+    assert larm["larm"] is False
+    assert "glest" in larm["text"]
+
+
 def test_trasig_rad_hoppas_over(tmp_path: Path) -> None:
     fil = tmp_path / "history.jsonl"
     fil.write_text(
