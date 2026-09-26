@@ -540,6 +540,51 @@
 			],
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Kolla HA-miljon",
+			"type": "shell",
+			"command": "C:\\Users\\Niklas\\AppData\\Local\\Temp\\ha-venv\\Scripts\\python.exe",
+			"args": [
+				"-c",
+				"from homeassistant.const import __version__; print('Home Assistant', __version__)"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Testa kameran mot HA",
+			"type": "shell",
+			"command": "C:\\Users\\Niklas\\AppData\\Local\\Temp\\ha-venv\\Scripts\\python.exe",
+			"args": [
+				"captures\\ha_test.py"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Installera HA (testmiljo)",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/c",
+				"F:\\vscode\\vatten_kamera\\captures\\ha_venv.cmd"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Slapp v0.19.0",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/c",
+				"F:\\vscode\\vatten_kamera\\captures\\slapp19.cmd"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
 		}
 	]
 }

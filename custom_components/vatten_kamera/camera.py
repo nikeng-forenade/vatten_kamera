@@ -39,6 +39,13 @@ class SenasteBildCamera(VattenKameraEntity, Camera):
 
     def __init__(self, coordinator: VattenKameraCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
+        # Camera maste initieras sjalv. HA:s BaseCoordinatorEntity.__init__ anropar
+        # inte super(), sa nar basklasserna star i ordningen ovan hinner
+        # Camera.__init__ aldrig kora - och da saknas det som HA:s cachade
+        # egenskaper (is_on, is_streaming, entity_picture) vilar pa. Kameran
+        # svarar da inte med nagon bild als. Alla HA:s egna integrationer som
+        # blandar CoordinatorEntity med Camera gor darfor precis sa har.
+        Camera.__init__(self)
         self._attr_unique_id = f"{entry.entry_id}_senaste_bild"
 
     @property

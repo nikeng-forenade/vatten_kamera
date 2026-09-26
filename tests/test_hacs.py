@@ -9,6 +9,7 @@ isär - en ny entitet utan namn i granssnittet.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -36,6 +37,39 @@ def _sokvagar(data: dict, prefix: str = "") -> set[str]:
 
 
 # --- Filerna --------------------------------------------------------------
+
+
+def test_kameran_initierar_camera_klassen() -> None:
+    """Kameran maste anropa Camera.__init__ sjalv - annars blir det ingen bild.
+
+    HA:s BaseCoordinatorEntity.__init__ anropar inte super(), och Camera ligger
+    efter den i klassordningen. Utan ett uttryckligt anrop satts aldrig _cache
+    upp, och da kastar HA:s cachade egenskaper (is_on, is_streaming,
+    entity_picture) AttributeError - kameran svarar inte med nagon bild.
+    Testet laser koden som ett trad och letar efter anropet, sa att det inte
+    kan smyga tillbaka utan att nagon märker det.
+    """
+    trad = ast.parse((INTEGRATION / "camera.py").read_text(encoding="utf-8"))
+    klass = next(
+        nod
+        for nod in ast.walk(trad)
+        if isinstance(nod, ast.ClassDef) and nod.name == "SenasteBildCamera"
+    )
+    init = next(
+        nod
+        for nod in klass.body
+        if isinstance(nod, ast.FunctionDef) and nod.name == "__init__"
+    )
+    anrop = [
+        nod
+        for nod in ast.walk(init)
+        if isinstance(nod, ast.Call)
+        and isinstance(nod.func, ast.Attribute)
+        and nod.func.attr == "__init__"
+        and getattr(nod.func.value, "id", "") == "Camera"
+    ]
+
+    assert anrop, "SenasteBildCamera maste anropa Camera.__init__(self)"
 
 
 def test_integrationen_har_alla_filer() -> None:

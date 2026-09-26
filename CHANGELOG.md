@@ -13,6 +13,21 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.19.0 — 2026-09-26
+
+**Kameran i Home Assistant visar bilden igen.**
+
+* Entiteten `camera.vatten_kamera_senaste_bild` ("Last image") skapades men svarade aldrig med
+  någon bild. Orsaken var klassordningen: `SenasteBildCamera` ärver `VattenKameraEntity`
+  **före** HA:s `Camera`, och HA:s `BaseCoordinatorEntity.__init__` anropar **inte**
+  `super().__init__()`. Då körs aldrig `Camera.__init__`, som sätter upp `_cache` och
+  `access_tokens` — och HA:s cachade egenskaper (`is_on`, `is_streaming`, `entity_picture`)
+  kastar då `AttributeError`, så ingen bild kan hämtas.
+* Fixen är den som HA:s egna integrationer använder när de blandar `CoordinatorEntity` med
+  `Camera`: `Camera.__init__(self)` anropas uttryckligen i `__init__`.
+* Nytt test (`tests/test_hacs.py`) läser `camera.py` som ett syntaxträd och kräver att
+  anropet finns kvar.
+
 ## 0.18.0 — 2026-09-26
 
 **Läckagelarmet kräver ett oavbrutet uttag i 30 minuter (och kunde tidigare aldrig tändas).**
