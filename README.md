@@ -85,7 +85,7 @@ DS-2CD2432F-IW, svarar `401` på Digest.)
 2. **Inställningar → gruppen Kameran**: fyll i *Kamerans adress*, *Användare* och *Lösenord*.
    Lösenordet visas aldrig igen — det står bara `•••••• (sparat)` när det finns ett sparat
    värde, och ett tomt fält lämnar det gamla värdet i fred.
-3. tryck **Spara**. Ingen omstart behövs — tjänsten läser om `.env` mellan körningarna.
+3. Tryck **Spara**. Ingen omstart behövs — tjänsten läser om `.env` mellan körningarna.
 4. Tryck **Testa kameran** i kamerakortet. Svarar den `kamera svarar: DS-2CD… firmware …`
    är kameran på plats, och kortet visar vilket läge den står i just nu.
 
