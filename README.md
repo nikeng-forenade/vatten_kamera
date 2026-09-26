@@ -345,6 +345,8 @@ flowchart LR
 
 1. I HACS: **Integrations → ⋮ → Custom repositories**, klistra in
    `https://github.com/nikeng-forenade/vatten_kamera` och välj typen **Integration**.
+   (Är du inloggad på Home Assistant i samma webbläsare går det med ett klick:
+   [lägg till repot i HACS](https://my.home-assistant.io/redirect/hacs_repository/?owner=nikeng-forenade&repository=vatten_kamera&category=integration).)
 2. Sök upp **Vattenkamera** i HACS och installera. Starta om Home Assistant.
 3. **Inställningar → Enheter och tjänster → Lägg till integration → Vattenkamera** och
    fyll i tjänstens **IP** och **port** (`8099`).
@@ -770,6 +772,11 @@ ner) eller **inifrån containern**. Båda gör samma sak.
 
 Koden ligger i `/opt/vattenkamera`, men data (calibration, senaste värdet, bilder, logg)
 i `/opt/vattenkamera/data` — så en uppdatering av koden rör inte installationen.
+
+**Tidszonen** sätts till Proxmox-hostens (`--timezone`, som skriptet fyller i själv). En
+container har annars UTC, vilket ger fel klockslag i gränssnittet och historiken — och en
+nattkörning skulle starta två timmar fel, eftersom värdet bara syns några sekunder strax
+efter 02:00.
 
 Har du inte fyllt i kameran vid installationen gör du det i gränssnittet efteråt — se
 [Lägga in kameran](#lägga-in-kameran). Samma gäller kalibreringen.

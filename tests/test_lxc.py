@@ -78,6 +78,17 @@ def test_fel_sokvag_ger_fel_innan_containern_skapas() -> None:
     assert 'hittar inte kalibreringsfilen' in CREATE
 
 
+def test_tidszonen_foljer_med_fran_hosten() -> None:
+    """Containern har sin egen tidszon - den maste sattas, annars gar klockan fel.
+
+    I UTC visar granssnittet och historiken fel klockslag, och en nattkorning
+    skulle starta tva timmar fel (vardet visas bara nagra sekunder efter 02:00).
+    """
+    assert "--timezone" in INSTALL and "--timezone" in CREATE
+    assert "timedatectl set-timezone" in INSTALL
+    assert "timedatectl show -p Timezone --value" in CREATE
+
+
 def test_tjansten_anvander_virtualenv_och_kan_startas_om() -> None:
     """Opencv without grafik, och en enhet som granssnittet kan starta om."""
     assert "opencv-python-headless" in INSTALL

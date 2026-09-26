@@ -26,6 +26,7 @@ HA_TOKEN=""
 UNIT=""
 STATUS_PORT="8099"
 CALIBRATION=""
+TIMEZONE=""
 
 usage() {
   cat <<'TEXT'
@@ -42,6 +43,7 @@ Anvandning: bash install.sh [flaggor]
   --unit ENHET             Enhet vid sensorn, t.ex. l
   --status-port PORT       Port for granssnittet (standard 8099)
   --calibration FIL        Lagg in en fardig calibration.json
+  --timezone TZ            Tidszon, t.ex. Europe/Stockholm (annars UTC i containern)
   --help                   Visa det har
 TEXT
   exit 0
@@ -60,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --unit) UNIT="$2"; shift 2 ;;
     --status-port) STATUS_PORT="$2"; shift 2 ;;
     --calibration) CALIBRATION="$2"; shift 2 ;;
+    --timezone) TIMEZONE="$2"; shift 2 ;;
     --help|-h) usage ;;
     *) echo "Okand flagga: $1"; exit 1 ;;
   esac
@@ -89,6 +92,9 @@ else
   echo "Kamera:      fylls i i granssnittet efterat"
 fi
 echo "Granssnitt:  port $STATUS_PORT"
+if [[ -n "$TIMEZONE" ]]; then
+  echo "Tidszon:     $TIMEZONE"
+fi
 echo ""
 echo "Det har tar nagra minuter (Python och OpenCV ska in) och ser nastan stilla ut"
 echo "medan paketen installeras - avbryt inte."
@@ -102,6 +108,18 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip git curl \
   libglib2.0-0 libgomp1 >/dev/null
+
+# --- Tidszonen -------------------------------------------------------------
+# En container har sin egen tidszon och arver inte hostens: star den i UTC visar
+# granssnittet och historiken fel klockslag, och en nattkorning skulle starta
+# tva timmar fel (vardet visas bara nagra sekunder strax efter 02:00).
+if [[ -n "$TIMEZONE" ]] && command -v timedatectl >/dev/null 2>&1; then
+  if timedatectl set-timezone "$TIMEZONE" 2>/dev/null; then
+    echo "Tidszonen satt till $TIMEZONE."
+  else
+    echo "VARNING: kunde inte sätta tidszonen $TIMEZONE (finns den i tzdata?)"
+  fi
+fi
 
 # --- Koden -----------------------------------------------------------------
 if [[ -d "$APP_DIR/.git" ]]; then

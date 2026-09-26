@@ -141,6 +141,13 @@ GATEWAY=$(sanitize "$GATEWAY")
 CALIBRATION=$(sanitize "$CALIBRATION")
 SETTINGS=$(sanitize "$SETTINGS")
 
+# Containern har sin egen tidszon och arver inte hostens - skicka med den sa att
+# granssnittet visar ratt klockslag och nattlasningen startar ratt tid.
+HOST_TZ=$(sanitize "$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || true)")
+if [[ -n "$HOST_TZ" ]]; then
+  INSTALL_OPTS="$INSTALL_OPTS --timezone $HOST_TZ"
+fi
+
 if [[ "$IP" != "dhcp" && "$IP" != */* ]]; then
   IP="${IP}/24"
   echo "Lade till /24 sjalv -> $IP"
