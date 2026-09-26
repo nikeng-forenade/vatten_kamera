@@ -38,9 +38,24 @@ log = logging.getLogger("installningar")
 
 STANDARD_FIL = "settings_export.json"
 
-# Posterna i .env som ar hemliga. Allt som slutar pa _PASSWORD eller _TOKEN
+# Poster i .env som ar hemliga. Allt som slutar pa _PASSWORD eller _TOKEN
 # filtreras dessutom bort, sa att en ny hemlighet inte kan smita med av misstag.
 HEMLIGHETER = ("CAMERA_PASSWORD", "HA_TOKEN", "MQTT_PASSWORD")
+
+# Var installationen bor - inte hur den laser. Att flytta dem till en annan maskin
+# skulle peka tjansten fel, sa de foljer varken med ut eller in.
+MASKINNYCKEL = (
+    "DATA_DIR",
+    "CAPTURES_DIR",
+    "CALIBRATION_FILE",
+    "LATEST_FILE",
+    "HISTORY_FILE",
+    "LOG_FILE",
+)
+
+
+def _ar_maskinnyckel(nyckel: str) -> bool:
+    return nyckel.upper() in MASKINNYCKEL
 
 
 def _ar_hemlig(nyckel: str) -> bool:
@@ -101,7 +116,7 @@ def samla(
         "env": {
             nyckel: varde
             for nyckel, varde in sorted(varden.items())
-            if not _ar_hemlig(nyckel)
+            if not _ar_hemlig(nyckel) and not _ar_maskinnyckel(nyckel)
         },
     }
 
@@ -142,10 +157,13 @@ def skriv(
     varden = {
         nyckel: str(varde)
         for nyckel, varde in (data.get("env") or {}).items()
-        if not _ar_hemlig(nyckel)
+        if not _ar_hemlig(nyckel) and not _ar_maskinnyckel(nyckel)
     }
     hemligheter = sorted(
         nyckel for nyckel in (data.get("env") or {}) if _ar_hemlig(nyckel)
+    )
+    maskinnycklar = sorted(
+        nyckel for nyckel in (data.get("env") or {}) if _ar_maskinnyckel(nyckel)
     )
     kanda = {nyckel: varde for nyckel, varde in varden.items() if nyckel in settings_store.BY_KEY}
     okanda = {nyckel: varde for nyckel, varde in varden.items() if nyckel not in settings_store.BY_KEY}
@@ -154,6 +172,7 @@ def skriv(
         "env": sorted(kanda),
         "okanda": sorted(okanda),
         "hemligheter": hemligheter,
+        "maskinnycklar": maskinnycklar,
         "problem": {},
         "filer": {},
         "torr": torr,
@@ -207,6 +226,10 @@ def _visa(rapport: dict[str, Any]) -> None:
     if rapport.get("hemligheter"):
         print(
             "hemligheter i filen togs inte med: " + ", ".join(rapport["hemligheter"])
+        )
+    if rapport.get("maskinnycklar"):
+        print(
+            "maskinspecifika sokvagar hoppade over: " + ", ".join(rapport["maskinnycklar"])
         )
     print(
         "losenord och tokens foljer inte med - fyll i kamerans losenord i granssnittet "

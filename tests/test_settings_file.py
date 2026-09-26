@@ -147,3 +147,26 @@ def test_exportfilen_ar_gitignorerad() -> None:
     """Filen innehaller kamerans adress - den ska aldrig kunna committas."""
     rader = (ROT / ".gitignore").read_text(encoding="utf-8").split()
     assert settings_file.STANDARD_FIL in rader
+
+
+def test_maskinspecifika_sokvagar_foljer_inte_med(tmp_path: Path) -> None:
+    """Var installationen bor ska inte flyttas - bara hur den laser.
+
+    Ett DATA_DIR fran en annan maskin skulle peka tjansten fel, sa bade exporten
+    och inlasningen hoppar over dem.
+    """
+    env = _skriv_env(tmp_path, "COLOR_CHANNEL=b\nDATA_DIR=/nagon/annanstans\nLOG_FILE=/tmp/x.log\n")
+    data = settings_file.samla(env=env, kalibrering=tmp_path / "saknas.json")
+    assert "DATA_DIR" not in data["env"]
+    assert "LOG_FILE" not in data["env"]
+
+    env2 = tmp_path / "ny.env"
+    env2.write_text("COLOR_CHANNEL=gray\n", encoding="utf-8")
+    rapport = settings_file.skriv(
+        {"env": {"DATA_DIR": "/nagon/annanstans", "COLOR_CHANNEL": "b"}},
+        env=env2,
+        kalibrering=tmp_path / "kal.json",
+    )
+    assert "DATA_DIR" not in env2.read_text(encoding="utf-8")
+    assert "COLOR_CHANNEL=b" in env2.read_text(encoding="utf-8")
+    assert rapport["maskinnycklar"] == ["DATA_DIR"]

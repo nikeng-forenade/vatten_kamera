@@ -843,17 +843,20 @@ den nya containern.
 
 Utan argument startar den en **interaktiv guide** som frågar efter container-ID, nätverk,
 kamerans adress och lösenord, **läsläget** (`intervall` som standard — frågan om klockslag
-kommer bara om du väljer `natt`), kalibreringsfil (valfritt) och Home Assistant — svara bara
-på frågorna, så är allt klart. Allt går också att skicka in direkt:
+kommer bara om du väljer `natt`), kalibreringsfil och inställningar att flytta med (båda
+valfria) samt Home Assistant — svara bara på frågorna, så är allt klart. Allt går också att
+skicka in direkt:
 
 ```bash
 bash proxmox-create.sh 210 local-lvm vmbr0 192.168.1.50/24 192.168.1.1 \
-  --camera-ip <kamerans adress> --camera-user admin --camera-password '...' \
-  --calibration calibration.json --unit l
+  --settings settings_export.json --unit l
 ```
 
-`--calibration calibration.json` kopieras **in i containern** och läggs på plats i
-`/opt/vattenkamera/data/` — filen är kamerans, inte datorns, så den från
+`--settings settings_export.json` kopieras in i containern och **läses in automatiskt efter
+installationen** — då kommer `.env`, kalibreringen, läsprofilen och kamerans backup med,
+och tjänsten startas om så att allt gäller direkt. (Bara kamerans lösenord måste fyllas i
+själv.) Vill du bara ha kalibreringen räcker `--calibration calibration.json`: den kopieras
+in och läggs i `/opt/vattenkamera/data/` — filen är kamerans, inte datorns, så den från
 utvecklingsmaskinen fungerar. Har du ingen, kör
 `cd /opt/vattenkamera && .venv/bin/python main.py calibrate --frames 16 --save` i containern.
 
@@ -873,6 +876,9 @@ en fil — utan lösenord och tokens, som aldrig lämnar maskinen.
 scp settings_export.json root@<containerns adress>:/root/
 pct exec 210 -- bash -c "cd /opt/vattenkamera && .venv/bin/python tools/settings_file.py --las /root/settings_export.json"
 ```
+
+Skapa containern och få med allt på en gång genom att ge filen till `proxmox-create.sh`:
+`--settings settings_export.json` (se ovan) — den läser in den åt dig efter installationen.
 
 `--torr` visar bara vad som skulle ändras. En fil som skrivs över sparas som `.bak`.
 Kamerans **lösenord** fyller du i efteråt i gränssnittet (Inställningar → Kameran) — det är

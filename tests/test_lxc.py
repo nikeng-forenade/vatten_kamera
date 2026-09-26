@@ -62,6 +62,15 @@ def test_kalibreringen_kan_folja_med_in_i_containern() -> None:
     assert 'INSTALL_OPTS="$INSTALL_OPTS --calibration /root/calibration.json"' in CREATE
 
 
+def test_installningarna_kan_folja_med_containern() -> None:
+    """--settings ska kopieras in och lasas in efter installationen."""
+    assert "--settings" in CREATE
+    assert 'pct push "$CT_ID" "$SETTINGS" /root/settings_export.json' in CREATE
+    assert "tools/settings_file.py --las /root/settings_export.json" in CREATE
+    # Port- och adressinstallningar slar igenom forst efter en omstart.
+    assert "systemctl restart vatten-kamera" in CREATE
+
+
 def test_tjansten_anvander_virtualenv_och_kan_startas_om() -> None:
     """Opencv without grafik, och en enhet som granssnittet kan starta om."""
     assert "opencv-python-headless" in INSTALL

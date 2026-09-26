@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 
 ROOT = Path(__file__).resolve().parent
 

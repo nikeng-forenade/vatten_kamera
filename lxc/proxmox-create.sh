@@ -38,6 +38,7 @@ MEMORY="512"
 DISK="4"
 INSTALL_OPTS=""
 CALIBRATION=""
+SETTINGS=""
 
 show_help() {
   echo "Anvandning: bash proxmox-create.sh [CT_ID] [LAGRING] [BRYGGA] [IP/CIDR] [GATEWAY] [flaggor]"
@@ -51,6 +52,7 @@ show_help() {
   echo "  --ha-token TOKEN         Langlivad token"
   echo "  --unit ENHET             Enhet vid sensorn, t.ex. l"
   echo "  --calibration FIL        Kalibreringsfil pa den har maskinen (kopieras in i containern)"
+  echo "  --settings FIL           Installningar att flytta med (settings_export.json)"
   echo "  --cores N                Antal karnor (standard 1)"
   echo "  --memory MB              Minne i MB (standard 512)"
   echo "  --disk GB                Disk i GB (standard 4)"
@@ -69,6 +71,7 @@ while [[ $# -gt 0 ]]; do
     --run-at|--camera-ip|--camera-user|--camera-password|--ha-url|--ha-token|--unit|--status-port)
       INSTALL_OPTS="$INSTALL_OPTS $1 $2"; shift 2 ;;
     --calibration) CALIBRATION="$2"; shift 2 ;;
+    --settings) SETTINGS="$2"; shift 2 ;;
     --*) echo "Okand flagga: $1"; exit 1 ;;
     *) POS_ARGS+=("$1"); shift ;;
   esac
@@ -81,7 +84,7 @@ IP="${POS_ARGS[3]:-$IP}"
 GATEWAY="${POS_ARGS[4]:-$GATEWAY}"
 
 # --- Interaktivt lage ------------------------------------------------------
-if [[ ${#POS_ARGS[@]} -eq 0 ]] && [[ -z "$INSTALL_OPTS" ]] && [[ -z "$CALIBRATION" ]]; then
+if [[ ${#POS_ARGS[@]} -eq 0 ]] && [[ -z "$INSTALL_OPTS" ]] && [[ -z "$CALIBRATION" ]] && [[ -z "$SETTINGS" ]]; then
   echo ""
   echo "  +-------------------------------------------+"
   echo "  |        Vattenkamera - LXC i Proxmox        |"
@@ -118,6 +121,8 @@ if [[ ${#POS_ARGS[@]} -eq 0 ]] && [[ -z "$INSTALL_OPTS" ]] && [[ -z "$CALIBRATIO
     fi
     read -r -p "  Kalibreringsfil pa den har maskinen (blank = kalibrera i containern): " input
     [[ -n "$input" ]] && CALIBRATION="$input"
+    read -r -p "  Installningar att flytta med, t.ex. settings_export.json (blank = inga): " input
+    [[ -n "$input" ]] && SETTINGS="$input"
     read -r -p "  Home Assistant-adress (blank = hoppa over): " input
     if [[ -n "$input" ]]; then
       INSTALL_OPTS="$INSTALL_OPTS --ha-url $input"
@@ -134,6 +139,7 @@ BRIDGE=$(sanitize "$BRIDGE")
 IP=$(sanitize "$IP")
 GATEWAY=$(sanitize "$GATEWAY")
 CALIBRATION=$(sanitize "$CALIBRATION")
+SETTINGS=$(sanitize "$SETTINGS")
 
 if [[ "$IP" != "dhcp" && "$IP" != */* ]]; then
   IP="${IP}/24"
@@ -171,6 +177,7 @@ echo "Lagring:   $STORAGE ($DISK GB, $CORES karna, $MEMORY MB)"
 echo "Natverk:   $BRIDGE $IP ${GATEWAY:+gw=$GATEWAY}"
 echo "Installer: ${INSTALL_OPTS:-standard}"
 echo "Kalibrering: ${CALIBRATION:-ingen (kalibreras i containern)}"
+echo "Installningar: ${SETTINGS:-standard}"
 echo ""
 
 NET0="name=eth0,bridge=${BRIDGE},ip=${IP}"
@@ -211,11 +218,31 @@ if [[ -n "$CALIBRATION" ]]; then
   INSTALL_OPTS="$INSTALL_OPTS --calibration /root/calibration.json"
 fi
 
+if [[ -n "$SETTINGS" ]]; then
+  if [[ ! -f "$SETTINGS" ]]; then
+    echo "FEL: hittar inte installningsfilen $SETTINGS"
+    echo "     Gor den med: python tools/settings_file.py --spara"
+    exit 1
+  fi
+  echo "Skickar in installningarna..."
+  pct push "$CT_ID" "$SETTINGS" /root/settings_export.json
+fi
+
 echo "Kor installationen (det tar nagra minuter - Python och OpenCV ska byggas)..."
 if [[ -n "$INSTALL_OPTS" ]]; then
   pct exec "$CT_ID" -- env LC_ALL=C bash /root/install.sh $INSTALL_OPTS
 else
   pct exec "$CT_ID" -- env LC_ALL=C bash /root/install.sh
+fi
+
+if [[ -n "$SETTINGS" ]]; then
+  # Efter installationen: lagg in allt som ar inmatt (utan losenord) och starta om
+  # sa att aven port- och adressinstallningar slar igenom.
+  echo "Lagger in installningarna..."
+  pct exec "$CT_ID" -- env LC_ALL=C bash -c \
+    "cd /opt/vattenkamera && .venv/bin/python tools/settings_file.py --las /root/settings_export.json"
+  pct exec "$CT_ID" -- env LC_ALL=C systemctl restart vatten-kamera
+  echo "Startar om tjansten..."
 fi
 
 IP_ADDR=$(pct exec "$CT_ID" -- ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
@@ -228,7 +255,10 @@ echo ""
 echo "  Granssnitt:  http://${IP_ADDR:-<containerns ip>}:${PORT}/"
 echo ""
 echo "  Kvar att gora:"
-if [[ -n "$CALIBRATION" ]]; then
+if [[ -n "$SETTINGS" ]]; then
+  echo "    1. Installningarna ar inlasta, och kalibreringen med."
+  echo "       Kamerans losenord foljer inte med - fyll i det i granssnittet."
+elif [[ -n "$CALIBRATION" ]]; then
   echo "    1. Kalibreringen ar inlagd."
 else
   echo "    1. Lagg in kalibreringen (kalibreringen ar kamerans, inte datorns):"
