@@ -872,10 +872,19 @@ en fil — utan lösenord och tokens, som aldrig lämnar maskinen.
 ```
 
 ```bash
-# kopiera filen till containern och läs in den
-scp settings_export.json root@<containerns adress>:/root/
-pct exec 210 -- bash -c "cd /opt/vattenkamera && .venv/bin/python tools/settings_file.py --las /root/settings_export.json"
+# från din dator: lägg filen på Proxmox-hostens disk (den har ssh)
+scp settings_export.json root@<proxmox-hostens adress>:/root/
 ```
+
+```bash
+# på Proxmox-skalet: skicka in den i containern och läs in den
+pct push 210 /root/settings_export.json /root/settings_export.json
+pct exec 210 -- bash -c "cd /opt/vattenkamera && .venv/bin/python tools/settings_file.py --las /root/settings_export.json"
+pct exec 210 -- systemctl restart vatten-kamera
+```
+
+En ny container har ingen ssh-server, därför går filen via Proxmox-skalet (`pct push`) i
+stället för direkt med `scp` till containern.
 
 Skapa containern och få med allt på en gång genom att ge filen till `proxmox-create.sh`:
 `--settings settings_export.json` (se ovan) — den läser in den åt dig efter installationen.

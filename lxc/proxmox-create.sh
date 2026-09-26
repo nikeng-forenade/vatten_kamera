@@ -262,7 +262,7 @@ elif [[ -n "$CALIBRATION" ]]; then
   echo "    1. Kalibreringen ar inlagd."
 else
   echo "    1. Lagg in kalibreringen (kalibreringen ar kamerans, inte datorns):"
-  echo "         scp calibration.json root@${IP_ADDR:-<ip>}:/opt/vattenkamera/data/"
+  echo "         pct push $CT_ID calibration.json /opt/vattenkamera/data/calibration.json"
   echo "       eller kor 'main.py calibrate --frames 16 --save' i containern."
 fi
 echo "    2. Oppna granssnittet och klicka 'Testa kameran' och 'Las nu'."
