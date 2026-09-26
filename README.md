@@ -273,6 +273,28 @@ flowchart LR
 
 Adressen står i webbgränssnittets nederkant, färdig att kopiera.
 
+### Krav på repot (innan HACS kan använda det)
+
+HACS kan bara läsa **publika** repon — `Private GitHub repositories can not be used with
+HACS at all`. Repot måste alltså vara publikt, och då gäller projektets regel fullt ut:
+**inga kamerauppgifter i git** (adress, användare, lösenord). Koden är byggd så redan:
+`.env`, `calibration.json` och `camera_settings_backup.json` är gitignorerade, och
+`tests/test_kameran.py` och `tests/test_lxc.py` vaktar att ingen adress smyger in.
+
+Kontrollera historiken innan du byter synlighet — en fil som tagits bort ur koden ligger
+kvar i git:
+
+```bash
+git log --all --oneline -- .env calibration.json camera_settings_backup.json
+```
+
+En force-push **tar inte** bort den från GitHub (gamla commits nås fortfarande på sin hash).
+Riktigt ren blir historiken först om repot raderas och skapas på nytt från den lokala koden.
+
+HACS behöver också en **beskrivning** på repot, och mår bäst av ämnena `hacs` och
+`integration`. Releases är frivilliga: utan dem installerar HACS från `main`, och
+`manifest.json`s `version` visas i stället för en tagg.
+
 ### Entiteter
 
 | Entitet | Betydelse |
