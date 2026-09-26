@@ -76,6 +76,22 @@ def test_hacs_json_ar_giltig() -> None:
     assert hacs["content_in_root"] is False  # integrationen ligger i custom_components/
 
 
+def test_brand_ikonen_finns() -> None:
+    """HA och HACS visar ikonen ur brand/ - den ska vara kvadratisk och 256x256.
+
+    Utan den ritar Home Assistant en tom ruta i stället för integrationsikonen.
+    """
+    import cv2
+
+    fil = INTEGRATION / "brand" / "icon.png"
+    assert fil.exists(), "brand/icon.png saknas (kor tools/make_icon.py)"
+
+    bild = cv2.imread(str(fil), cv2.IMREAD_UNCHANGED)
+    assert bild is not None, "icon.png gick inte att lasa"
+    assert bild.shape[0] == bild.shape[1] == 256, f"fel storlek: {bild.shape[:2]}"
+    assert bild.shape[2] == 4, "ikonen ska ha genomskinliga horn"
+
+
 def test_integrationen_oppnar_inga_nya_paket() -> None:
     """HACS ska kunna installera utan att dra in nagot extra.
 
