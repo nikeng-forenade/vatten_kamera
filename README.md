@@ -798,6 +798,12 @@ bash /root/install.sh --camera-ip <kamerans adress> --camera-user admin \
 
 Vill du fylla i kameran i gränssnittet i stället räcker `bash /root/install.sh`.
 
+Saknas `curl` i en helt ny container (Debian-mallen har `wget` men inte alltid `curl`):
+
+```bash
+apt-get update && apt-get install -y curl ca-certificates
+```
+
 Vanliga kommandon inne i containern (stå i `/opt/vattenkamera`, `cd /opt/vattenkamera`):
 
 | Vad | Kommando |
