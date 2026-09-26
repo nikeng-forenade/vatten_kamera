@@ -155,15 +155,6 @@ FIELDS: tuple[Field, ...] = (
     _field("MIN_AGREEMENT", "Minsta antal roster", "Rostningen", kind="int", minimum=1, maximum=100),
     _field("MIN_CONFIDENCE", "Minsta konfidens per siffra", "Rostningen", kind="float", minimum=0, maximum=1),
     _field(
-        "STOP_WHEN_READY",
-        "Sluta sa snart vardet ar fangat",
-        "Rostningen",
-        kind="bool",
-        default="true",
-        help="Av = las hela fonstret ut, aven efter att vardesidan synts",
-        only_in_mode="natt",
-    ),
-    _field(
         "KEEP_DAYS",
         "Spara bilderna i sa har manga dygn",
         "Rostningen",

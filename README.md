@@ -673,6 +673,33 @@ bash lxc/install.sh --camera-password '...' --mode natt --run-at 02:05:00
 Koden ligger i `/opt/vattenkamera`, men data (calibration, senaste värdet, bilder, logg)
 i `/opt/vattenkamera/data` — så en uppdatering av koden rör inte installationen.
 
+#### Ett kommando från Proxmox-skalet
+
+`proxmox-create.sh` skapar containern, skickar in `install.sh` och kör den:
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/nikeng-forenade/vatten_kamera/main/lxc/proxmox-create.sh)"
+```
+
+Utan argument startar den en **interaktiv guide** som frågar efter container-ID, nätverk,
+kamerans adress och lösenord, kalibreringsfil (valfritt) och Home Assistant — svara bara på
+frågorna, så är allt klart. Allt går också att skicka in direkt:
+
+```bash
+bash proxmox-create.sh 210 local-lvm vmbr0 192.168.1.50/24 192.168.1.1 \
+  --camera-ip <kamerans adress> --camera-user admin --camera-password '...' \
+  --calibration calibration.json --unit l
+```
+
+`--calibration calibration.json` kopieras **in i containern** och läggs på plats i
+`/opt/vattenkamera/data/` — filen är kamerans, inte datorns, så den från
+utvecklingsmaskinen fungerar. Har du ingen, kör
+`cd /opt/vattenkamera && .venv/bin/python main.py calibrate --frames 16 --save` i containern.
+
+Efteråt finns **inget grafiskt installeringsprogram** — styrningen sker i webbläsaren på
+`http://<containerns-ip>:8099/`, och därifrån kan du ändra kamerans adress, läsläget och
+resten av `.env` utan att röra kommandoraden.
+
 ### Webbgränssnittet
 
 Öppna `http://<maskinens-ip>:8099/` för att se att allt lever. Startas med

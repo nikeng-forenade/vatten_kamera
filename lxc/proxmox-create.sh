@@ -37,6 +37,7 @@ CORES="1"
 MEMORY="512"
 DISK="4"
 INSTALL_OPTS=""
+CALIBRATION=""
 
 show_help() {
   echo "Anvandning: bash proxmox-create.sh [CT_ID] [LAGRING] [BRYGGA] [IP/CIDR] [GATEWAY] [flaggor]"
@@ -49,6 +50,7 @@ show_help() {
   echo "  --ha-url URL             Home Assistant, t.ex. http://homeassistant.local:8123"
   echo "  --ha-token TOKEN         Langlivad token"
   echo "  --unit ENHET             Enhet vid sensorn, t.ex. l"
+  echo "  --calibration FIL        Kalibreringsfil pa den har maskinen (kopieras in i containern)"
   echo "  --cores N                Antal karnor (standard 1)"
   echo "  --memory MB              Minne i MB (standard 512)"
   echo "  --disk GB                Disk i GB (standard 4)"
@@ -64,8 +66,9 @@ while [[ $# -gt 0 ]]; do
     --cores) CORES="$2"; shift 2 ;;
     --memory) MEMORY="$2"; shift 2 ;;
     --disk) DISK="$2"; shift 2 ;;
-    --run-at|--camera-ip|--camera-user|--camera-password|--ha-url|--ha-token|--unit|--status-port|--calibration)
+    --run-at|--camera-ip|--camera-user|--camera-password|--ha-url|--ha-token|--unit|--status-port)
       INSTALL_OPTS="$INSTALL_OPTS $1 $2"; shift 2 ;;
+    --calibration) CALIBRATION="$2"; shift 2 ;;
     --*) echo "Okand flagga: $1"; exit 1 ;;
     *) POS_ARGS+=("$1"); shift ;;
   esac
@@ -78,7 +81,7 @@ IP="${POS_ARGS[3]:-$IP}"
 GATEWAY="${POS_ARGS[4]:-$GATEWAY}"
 
 # --- Interaktivt lage ------------------------------------------------------
-if [[ ${#POS_ARGS[@]} -eq 0 ]] && [[ -z "$INSTALL_OPTS" ]]; then
+if [[ ${#POS_ARGS[@]} -eq 0 ]] && [[ -z "$INSTALL_OPTS" ]] && [[ -z "$CALIBRATION" ]]; then
   echo ""
   echo "  +-------------------------------------------+"
   echo "  |        Vattenkamera - LXC i Proxmox        |"
@@ -104,6 +107,8 @@ if [[ ${#POS_ARGS[@]} -eq 0 ]] && [[ -z "$INSTALL_OPTS" ]]; then
     [[ -n "$input" ]] && INSTALL_OPTS="$INSTALL_OPTS --camera-password $input"
     read -r -p "  Klockslag for lasningen [02:05:00]: " input
     INSTALL_OPTS="$INSTALL_OPTS --run-at ${input:-02:05:00}"
+    read -r -p "  Kalibreringsfil pa den har maskinen (blank = kalibrera i containern): " input
+    [[ -n "$input" ]] && CALIBRATION="$input"
     read -r -p "  Home Assistant-adress (blank = hoppa over): " input
     if [[ -n "$input" ]]; then
       INSTALL_OPTS="$INSTALL_OPTS --ha-url $input"
@@ -119,6 +124,7 @@ STORAGE=$(sanitize "$STORAGE")
 BRIDGE=$(sanitize "$BRIDGE")
 IP=$(sanitize "$IP")
 GATEWAY=$(sanitize "$GATEWAY")
+CALIBRATION=$(sanitize "$CALIBRATION")
 
 if [[ "$IP" != "dhcp" && "$IP" != */* ]]; then
   IP="${IP}/24"
@@ -155,6 +161,7 @@ echo "ID:        $CT_ID"
 echo "Lagring:   $STORAGE ($DISK GB, $CORES karna, $MEMORY MB)"
 echo "Natverk:   $BRIDGE $IP ${GATEWAY:+gw=$GATEWAY}"
 echo "Installer: ${INSTALL_OPTS:-standard}"
+echo "Kalibrering: ${CALIBRATION:-ingen (kalibreras i containern)}"
 echo ""
 
 NET0="name=eth0,bridge=${BRIDGE},ip=${IP}"
@@ -185,6 +192,16 @@ pct exec "$CT_ID" -- bash -c "apt-get update -qq && apt-get install -y -qq curl 
 echo "Skickar in installationsskriptet..."
 pct push "$CT_ID" "$INSTALL_SCRIPT" /root/install.sh
 
+if [[ -n "$CALIBRATION" ]]; then
+  if [[ ! -f "$CALIBRATION" ]]; then
+    echo "FEL: hittar inte kalibreringsfilen $CALIBRATION"
+    exit 1
+  fi
+  echo "Skickar in kalibreringen..."
+  pct push "$CT_ID" "$CALIBRATION" /root/calibration.json
+  INSTALL_OPTS="$INSTALL_OPTS --calibration /root/calibration.json"
+fi
+
 echo "Kor installationen (det tar nagra minuter - Python och OpenCV ska byggas)..."
 if [[ -n "$INSTALL_OPTS" ]]; then
   pct exec "$CT_ID" -- bash /root/install.sh $INSTALL_OPTS
@@ -202,8 +219,12 @@ echo ""
 echo "  Granssnitt:  http://${IP_ADDR:-<containerns ip>}:${PORT}/"
 echo ""
 echo "  Kvar att gora:"
-echo "    1. Lagg in kalibreringen (kalibreringen ar kamerans, inte datorns):"
-echo "         scp calibration.json root@${IP_ADDR:-<ip>}:/opt/vatten-kamera/data/"
-echo "       eller kor 'main.py calibrate --frames 16 --save' i containern."
+if [[ -n "$CALIBRATION" ]]; then
+  echo "    1. Kalibreringen ar inlagd."
+else
+  echo "    1. Lagg in kalibreringen (kalibreringen ar kamerans, inte datorns):"
+  echo "         scp calibration.json root@${IP_ADDR:-<ip>}:/opt/vattenkamera/data/"
+  echo "       eller kor 'main.py calibrate --frames 16 --save' i containern."
+fi
 echo "    2. Oppna granssnittet och klicka 'Testa kameran' och 'Las nu'."
 echo "=============================================================="

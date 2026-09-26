@@ -142,15 +142,18 @@ def test_historiken_ger_punkter_for_grafen(
 ) -> None:
     """Grafen ritas ur /api/history - varje punkt ska ha varde, tid och bild."""
     import history
+    from datetime import datetime
 
     bild = status_server.CAPTURES_DIR / "runs" / "graf.jpg"
     bild.parent.mkdir(parents=True, exist_ok=True)
     bild.write_bytes(b"\xff\xd8\xff\xd9")
     fil = tmp_path / "history.jsonl"
+    # Nyss, inte ett fast datum: /api/history filtrerar pa de senaste timmarna.
+    nu = datetime.now().replace(microsecond=0)
     history.write(
         [
             {
-                "read_at": "2026-09-21T18:00:00",
+                "read_at": nu.isoformat(),
                 "numeric": 0.57,
                 "display": "0.57",
                 "ok": True,

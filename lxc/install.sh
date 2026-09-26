@@ -217,7 +217,7 @@ echo ""
 if [[ ! -f "$DATA_DIR/calibration.json" ]]; then
   echo "KALIBRERINGEN SAKNAS annu - kopiera in den, den ar kamerans och inte"
   echo "datorns, sa den fran din utvecklingsmaskin fungerar:"
-  echo "    scp calibration.json root@${IP_ADDR:-<ip>}:/opt/vatten-kamera/data/"
+  echo "    scp calibration.json root@${IP_ADDR:-<ip>}:${DATA_DIR}/"
   echo "eller kor i containern:"
   echo "    cd $APP_DIR && .venv/bin/python main.py calibrate --frames 16 --save"
   echo ""

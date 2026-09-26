@@ -22,6 +22,8 @@ from settings_store import (
     write_env,
 )
 
+import settings_store
+
 ENV = """# En kommentar overst
 RUN_AT=02:05:00
 
@@ -163,8 +165,10 @@ def test_skriv_env_ror_inte_andra_rader(tmp_path: Path) -> None:
 
 
 def test_alla_falt_har_unik_nyckel() -> None:
-    nycklar = [item.key for item in BY_KEY.values()]
-    assert len(nycklar) == len(set(nycklar))
+    # FIELDS, inte BY_KEY: en dubblett forsvinner tyst i en dict och blev tva
+    # likadana rutor i granssnittet (bara den forsta gick att andra).
+    nycklar = [item.key for item in settings_store.FIELDS]
+    assert len(nycklar) == len(set(nycklar)), f"dubbletter: {sorted(set(nycklar))}"
     assert all(isinstance(item, Field) for item in BY_KEY.values())
 
 
