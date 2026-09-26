@@ -17,6 +17,8 @@ debug_frames/
 *.jpg
 *.png
 !docs/**/*.png
+# Brand-ikonen hor till integrationen och ska med (gors om med tools/make_icon.py).
+!custom_components/*/brand/*.png
 
 # Senaste lasningen, historiken och loggen - skrivs av tjansten, inte kod.
 latest.json
