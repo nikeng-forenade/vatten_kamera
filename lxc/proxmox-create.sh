@@ -146,6 +146,18 @@ if [[ "$IP" != "dhcp" && "$IP" != */* ]]; then
   echo "Lade till /24 sjalv -> $IP"
 fi
 
+if [[ -n "$CALIBRATION" && ! -f "$CALIBRATION" ]]; then
+  echo "FEL: hittar inte kalibreringsfilen $CALIBRATION"
+  exit 1
+fi
+
+if [[ -n "$SETTINGS" && ! -f "$SETTINGS" ]]; then
+  echo "FEL: hittar inte installningsfilen $SETTINGS"
+  echo "     Kopiera hit den fran maskinen som fungerar (se README), eller"
+  echo "     kor 'python tools/settings_file.py --spara' dar forst."
+  exit 1
+fi
+
 if pct status "$CT_ID" &>/dev/null; then
   echo "FEL: container $CT_ID finns redan. Valj ett annat ID eller ta bort den forst."
   exit 1
@@ -209,21 +221,12 @@ echo "Skickar in installationsskriptet..."
 pct push "$CT_ID" "$INSTALL_SCRIPT" /root/install.sh
 
 if [[ -n "$CALIBRATION" ]]; then
-  if [[ ! -f "$CALIBRATION" ]]; then
-    echo "FEL: hittar inte kalibreringsfilen $CALIBRATION"
-    exit 1
-  fi
   echo "Skickar in kalibreringen..."
   pct push "$CT_ID" "$CALIBRATION" /root/calibration.json
   INSTALL_OPTS="$INSTALL_OPTS --calibration /root/calibration.json"
 fi
 
 if [[ -n "$SETTINGS" ]]; then
-  if [[ ! -f "$SETTINGS" ]]; then
-    echo "FEL: hittar inte installningsfilen $SETTINGS"
-    echo "     Gor den med: python tools/settings_file.py --spara"
-    exit 1
-  fi
   echo "Skickar in installningarna..."
   pct push "$CT_ID" "$SETTINGS" /root/settings_export.json
 fi

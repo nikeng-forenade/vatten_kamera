@@ -71,6 +71,13 @@ def test_installningarna_kan_folja_med_containern() -> None:
     assert "systemctl restart vatten-kamera" in CREATE
 
 
+def test_fel_sokvag_ger_fel_innan_containern_skapas() -> None:
+    """En felstavad sokvag ska inte lamna en halvfardig container efter sig."""
+    kontroll = CREATE.index('hittar inte installningsfilen')
+    assert kontroll < CREATE.index('pct create "$CT_ID"'), "kontrollen ska komma forst"
+    assert 'hittar inte kalibreringsfilen' in CREATE
+
+
 def test_tjansten_anvander_virtualenv_och_kan_startas_om() -> None:
     """Opencv without grafik, och en enhet som granssnittet kan starta om."""
     assert "opencv-python-headless" in INSTALL
