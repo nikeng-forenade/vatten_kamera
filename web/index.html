@@ -182,6 +182,13 @@
     (<code>main.py daemon</code>, eller systemd-tjänsten <code>vatten-kamera</code>) så läser den
     enligt läsläget.
   </p>
+  <p class="hint warn" id="kalibreringVarning" hidden>
+    <b>Kalibreringen saknas</b> — tjänsten kan inte läsa displayen förrän den finns. Kör
+    <code>cd /opt/vattenkamera &amp;&amp; .venv/bin/python main.py calibrate --frames 16 --save</code>
+    på maskinen som kör tjänsten, eller lägg in <code>calibration.json</code> i
+    <code>data/</code> — samma fil som fungerar på den andra maskinen. Sedan läser den vid
+    nästa körning, ingen omstart behövs.
+  </p>
   <section class="panel">
     <h2>Inställningar</h2>
     <form id="form"></form>
@@ -296,6 +303,10 @@ async function refreshStatus() {
   // Granssnittet kan startas ensamt (main.py status) - da laser ingenting av sig
   // sjalv, och det ar bra att veta varfor.
   $('daemonVarning').hidden = !!health.loop;
+  // Utan kalibrering laser tjansten ingenting - saga det i stallet for att tiga.
+  $('kalibreringVarning').hidden = health.kalibrering !== false;
+  // Utan kalibrering laser tjansten ingenting - saga det, i stallet for tystnad.
+  $('kalibreringVarning').hidden = health.kalibrering !== false;
 
   $('integrationHint').innerHTML =
     `Adress till Home Assistant-integrationen (HACS): <code>${health.adress || ''}</code>`;

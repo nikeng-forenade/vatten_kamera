@@ -12,7 +12,9 @@ fejkas och vantan avbryts med ett undantag nar den borjar.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -306,6 +308,59 @@ def test_trasig_env_stoppar_inte_tjansten(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert instans.reload() is False
     assert instans.cfg is grund  # de gamla installningarna galler vidare
+
+
+def test_tjansten_startar_utan_kalibrering(tmp_path: Path) -> None:
+    """Att kalibreringen saknas ska inte sla ut hela tjansten.
+
+    Granssnittet ligger i samma process som lasningen. Kraschade tjanssten gick
+    det inte att se VARFOR, och den startade om i en evig loop - felet syntes
+    bara i journalen.
+    """
+    import config as config_mod
+    from pipeline import NightlyRunner
+
+    grund = config_mod.load_config()
+    cfg = config_mod.Config(**{**vars(grund), "calibration_file": tmp_path / "saknas.json"})
+
+    instans = NightlyRunner(cfg, use_lamp=False)
+
+    assert instans.calibration is None
+
+    summary = instans.run_once(duration_s=1.0, save=False)
+
+    assert summary.error == "kalibreringen saknas"
+    assert summary.value is None
+    assert summary.frames_taken == 0  # ingenting last, ingen falsk rad i historiken
+
+
+def test_kalibreringen_hittas_utan_omstart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Laggs filen dit borjar den lasa vid nasta varv - utan omstart.
+
+    Loopen laser om .env och kalibreringen mellan varven, sa att den som lagt in
+    filen slipper starta om tjansten.
+    """
+    import config as config_mod
+    from pipeline import NightlyRunner
+
+    grund = config_mod.load_config()
+    fil = tmp_path / "calibration.json"
+    cfg = config_mod.Config(**{**vars(grund), "calibration_file": fil})
+    monkeypatch.setattr(pipeline, "load_config", lambda: cfg)
+
+    instans = NightlyRunner(cfg, use_lamp=False)
+    assert instans.calibration is None
+
+    fil.write_text(
+        json.dumps({"roi": [0, 0, 10, 10], "digit_count": 4, "cell_boxes": []}),
+        encoding="utf-8",
+    )
+    instans.reload()
+
+    assert instans.calibration is not None
+    assert instans.calibration.roi == (0, 0, 10, 10)
 
 
 def test_versiontexten_namner_klockslaget_bara_i_lage_natt() -> None:

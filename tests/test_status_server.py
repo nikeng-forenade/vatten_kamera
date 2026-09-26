@@ -178,6 +178,25 @@ def test_historiken_ger_punkter_for_grafen(
     assert punkt["bild_url"] == "/api/frames/runs/graf.jpg"
 
 
+def test_health_berattar_om_kalibreringen_finns(server: StatusServer) -> None:
+    """Utan kalibrering kan tjansten inte lasa - det ska ga att se i granssnittet."""
+    status, data = hamta(server, "/api/health")
+
+    assert status == 200
+    assert isinstance(data["kalibrering"], bool)
+
+
+def test_granssnittet_varnar_nar_kalibreringen_saknas() -> None:
+    """Varningen ska finnas bade i sidan och styras av svaret fran /api/health."""
+    from pathlib import Path
+
+    sida = (Path(status_server.__file__).resolve().parent / "web" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert 'id="kalibreringVarning"' in sida
+    assert "health.kalibrering" in sida
+
+
 def test_okand_vag_ger_404(server: StatusServer) -> None:
     status, data = hamta(server, "/api/finns-inte")
 

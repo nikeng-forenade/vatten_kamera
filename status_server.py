@@ -631,6 +631,9 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
                 "lage": cfg.run.mode,
                 "var_minuter": cfg.run.every_minutes,
                 "run_at": cfg.run.run_at,
+                # Finns kalibreringen? Utan den kan tjansten inte lasa, och da
+                # visar granssnittet en forklaring i stallet for tystnad.
+                "kalibrering": cfg.calibration_file.exists(),
                 "enhet": cfg.mqtt.unit,
                 "aldsta_lasning_s": age,
                 "adress": f"http://{socket.gethostname()}:{PORT}",

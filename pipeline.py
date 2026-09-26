@@ -157,6 +157,20 @@ def write_status(
         log.warning("kunde inte skriva %s: %s", path, exc)
 
 
+def _ladda_kalibrering(fil: Path) -> Calibration | None:
+    """Kalibreringen, eller None om den inte finns an.
+
+    Tjansten ska starta anda: granssnittet ligger i samma process, och det ar
+    dar man ser vad som fattas. Forr kastades felet rakt igenom, och da dog hela
+    tjansten - aven granssnittet - i en startloop dar felet bara syntes i
+    journalen.
+    """
+    try:
+        return Calibration.load(fil)
+    except ReaderError:
+        return None
+
+
 class NightlyRunner:
     def __init__(self, cfg: Config, *, use_lamp: bool = True) -> None:
         self.cfg = cfg
@@ -165,7 +179,14 @@ class NightlyRunner:
         self.ha = HomeAssistant(cfg.ha)
         self.mqtt = MqttPublisher(cfg.mqtt)
         self.rest = RestPublisher(cfg.ha, unit=cfg.mqtt.unit)
-        self.calibration = Calibration.load(cfg.calibration_file)
+        self.calibration = _ladda_kalibrering(cfg.calibration_file)
+        if self.calibration is None:
+            log.error(
+                "kalibreringen saknas (%s) - tjansten kor vidare utan att lasa. Lagg in "
+                "den (calibration.json i data/) eller kor 'main.py calibrate --frames 16 "
+                "--save' dar tjansten kor, sa borjar den lasa av sig sjalv.",
+                cfg.calibration_file,
+            )
         # Hur olika tva bilder far vara for att anses visa samma varde.
         self.similarity_threshold = cfg.run.group_threshold
         self.use_camera_profile = cfg.run.use_camera_profile
@@ -194,7 +215,12 @@ class NightlyRunner:
         self.ha = HomeAssistant(ny.ha)
         self.mqtt = MqttPublisher(ny.mqtt)
         self.rest = RestPublisher(ny.ha, unit=ny.mqtt.unit)
-        self.calibration = Calibration.load(ny.calibration_file)
+        forra = self.calibration
+        self.calibration = _ladda_kalibrering(ny.calibration_file)
+        if forra is None and self.calibration is not None:
+            log.info("kalibreringen hittades (%s) - lasningen kan borja", ny.calibration_file)
+        elif forra is not None and self.calibration is None:
+            log.error("kalibreringen gick inte att lasa langre (%s)", ny.calibration_file)
         self.similarity_threshold = ny.run.group_threshold
         self.use_camera_profile = ny.run.use_camera_profile
         if andrat:
@@ -506,6 +532,29 @@ class NightlyRunner:
         stop_when_ready: bool | None = None,
     ) -> RunSummary:
         """En komplett korning: lampa pa -> las -> publicera -> lampa av."""
+        if self.calibration is None:
+            # Utan kalibrering gar det inte att lasa - men korningen ska inte
+            # kracha, och ingen falsk lasning ska hamna i historiken.
+            log.warning(
+                "hoppar over lasningen - kalibreringen saknas (%s). Se 'Installningar' "
+                "i granssnittet eller lagg in calibration.json i data/.",
+                self.cfg.calibration_file,
+            )
+            nu = datetime.now().isoformat(timespec="seconds")
+            return RunSummary(
+                version=VERSION,
+                started=nu,
+                finished=nu,
+                frames_taken=0,
+                frames_readable=0,
+                value=None,
+                numeric=None,
+                votes=0,
+                confidence=0.0,
+                lamp_used=False,
+                error="kalibreringen saknas",
+            )
+
         cfg = self.cfg.run
         duration = duration_s if duration_s is not None else cfg.window_s
         stop_early = cfg.stop_when_ready if stop_when_ready is None else stop_when_ready
