@@ -5,7 +5,8 @@ backup - samlas i en fil som kan kopieras till en annan maskin och lasas in dar.
 Det ar sa en LXC far samma installningar som den maskin dar lasningen provades ut.
 
 **Losenord och tokens foljer aldrig med.** De lamnas utanfor filen och fylls i pa
-den nya maskinen (i granssnittet, eller i `.env` for hand).
+den nya maskinen (i granssnittet, eller i `.env` for hand). Tomma varden foljer
+inte heller med - de skulle kunna skriva over nagot som installationen just satte.
 
 Kor:
     python tools/settings_file.py --spara                # -> settings_export.json
@@ -107,16 +108,24 @@ def samla(
 
     varden = settings_store.read_env(env)
     utelamnade = sorted(nyckel for nyckel in varden if _ar_hemlig(nyckel))
+    tomma = sorted(
+        nyckel
+        for nyckel, varde in varden.items()
+        if not varde.strip() and not _ar_hemlig(nyckel) and not _ar_maskinnyckel(nyckel)
+    )
 
     data: dict[str, Any] = {
         "version": config.VERSION,
         "skapad": datetime.now().isoformat(timespec="seconds"),
         "maskin": socket.gethostname(),
         "hemligheter_utelamnade": utelamnade,
+        # Tomma varden foljer inte med: de skulle skriva over ett varde som
+        # installationen just satte (t.ex. --unit l) utan att nagon bett om det.
+        "tomma_utelamnade": tomma,
         "env": {
             nyckel: varde
             for nyckel, varde in sorted(varden.items())
-            if not _ar_hemlig(nyckel) and not _ar_maskinnyckel(nyckel)
+            if varde.strip() and not _ar_hemlig(nyckel) and not _ar_maskinnyckel(nyckel)
         },
     }
 
@@ -157,7 +166,7 @@ def skriv(
     varden = {
         nyckel: str(varde)
         for nyckel, varde in (data.get("env") or {}).items()
-        if not _ar_hemlig(nyckel) and not _ar_maskinnyckel(nyckel)
+        if str(varde).strip() and not _ar_hemlig(nyckel) and not _ar_maskinnyckel(nyckel)
     }
     hemligheter = sorted(
         nyckel for nyckel in (data.get("env") or {}) if _ar_hemlig(nyckel)
@@ -262,6 +271,7 @@ def main() -> int:
         print(f"installningarna samlade i {fil}")
         print(f"  .env-nycklar   : {len(data['env'])}")
         print(f"  hemligheter    : {', '.join(data['hemligheter_utelamnade']) or 'inga'}")
+        print(f"  tomma varden   : {len(data['tomma_utelamnade'])} (foljer inte med)")
         for nyckel in ("kalibrering", "lasprofil", "kamerabackup"):
             print(f"  {nyckel:<15}: {'med' if nyckel in data else 'saknas'}")
         print("")

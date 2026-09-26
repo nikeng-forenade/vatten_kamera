@@ -143,6 +143,19 @@ def test_ovriga_nycklar_hamnar_i_env(tmp_path: Path) -> None:
     assert text.count("COLOR_CHANNEL=") == 1  # inte tva rader av samma nyckel
 
 
+def test_tomma_varden_foljer_inte_med(tmp_path: Path) -> None:
+    """En tom rad ar inte en installning - den far inte skriva over nagot.
+
+    Utan det har skulle '--unit l' fran installationen raderas av ett tomt UNIT i
+    .env pa maskinen som filen kom ifran.
+    """
+    env = _skriv_env(tmp_path, "UNIT=\nHA_LIGHT_ENTITY=\nCOLOR_CHANNEL=b\n")
+    data = settings_file.samla(env=env, kalibrering=tmp_path / "saknas.json")
+
+    assert data["env"] == {"COLOR_CHANNEL": "b"}
+    assert sorted(data["tomma_utelamnade"]) == ["HA_LIGHT_ENTITY", "UNIT"]
+
+
 def test_exportfilen_ar_gitignorerad() -> None:
     """Filen innehaller kamerans adress - den ska aldrig kunna committas."""
     rader = (ROT / ".gitignore").read_text(encoding="utf-8").split()
