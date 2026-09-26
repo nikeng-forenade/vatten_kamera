@@ -857,6 +857,28 @@ bash proxmox-create.sh 210 local-lvm vmbr0 192.168.1.50/24 192.168.1.1 \
 utvecklingsmaskinen fungerar. Har du ingen, kör
 `cd /opt/vattenkamera && .venv/bin/python main.py calibrate --frames 16 --save` i containern.
 
+#### Flytta med inställningarna från en annan maskin
+
+Har du redan läst in displayen på en maskin slipper du ställa in allt igen:
+`tools/settings_file.py` samlar **`.env`, kalibreringen, läsprofilen och kamerans backup** i
+en fil — utan lösenord och tokens, som aldrig lämnar maskinen.
+
+```powershell
+# på maskinen som redan fungerar
+.venv\Scripts\python.exe tools\settings_file.py --spara
+```
+
+```bash
+# kopiera filen till containern och läs in den
+scp settings_export.json root@<containerns adress>:/root/
+pct exec 210 -- bash -c "cd /opt/vattenkamera && .venv/bin/python tools/settings_file.py --las /root/settings_export.json"
+```
+
+`--torr` visar bara vad som skulle ändras. En fil som skrivs över sparas som `.bak`.
+Kamerans **lösenord** fyller du i efteråt i gränssnittet (Inställningar → Kameran) — det är
+den enda uppgiften som inte följer med. `settings_export.json` är gitignorerad, eftersom den
+innehåller kamerans adress.
+
 Efteråt finns **inget grafiskt installeringsprogram** — styrningen sker i webbläsaren på
 `http://<containerns-ip>:8099/`, och därifrån kan du ändra kamerans adress, läsläget och
 resten av `.env` utan att röra kommandoraden.

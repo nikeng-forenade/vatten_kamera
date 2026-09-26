@@ -2,6 +2,9 @@
 .env
 *.local.json
 
+# Filen som tools/settings_file.py skriver innehaller kamerans adress.
+settings_export.json
+
 # Kalibreringen ar specifik for kamerans exakta placering och gors pa plats
 # med "main.py calibrate --save". Den ska inte folja med till en annan maskin.
 calibration.json
