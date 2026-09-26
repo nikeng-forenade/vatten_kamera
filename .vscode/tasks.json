@@ -530,6 +530,16 @@
 			],
 			"isBackground": false,
 			"group": "build"
+		},
+		{
+			"label": "Visa ändringsloggen",
+			"type": "shell",
+			"command": "code",
+			"args": [
+				"CHANGELOG.md"
+			],
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }

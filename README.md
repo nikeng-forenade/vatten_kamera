@@ -2,6 +2,10 @@
 
 Läser av pumpdisplayen i källaren och skickar värdet till Home Assistant.
 
+> **Vad är nytt?** Alla ändringar står i **[CHANGELOG.md](CHANGELOG.md)** — en rubrik per
+> version, nyast överst, med både vad som ändrades och varför. Öppna den i VS Code med
+> uppgiften **Visa ändringsloggen** (eller `Ctrl+Skift+P` → *Tasks: Run Task*).
+
 Displayen visar **liter kvar innan spolning** som ett tal med två decimaler, t.ex. `1.22`
 och `0.50`. Den växlar mellan fyra sidor hela dygnet — klockan, spolttiden **02:00**,
 värdet och flödet — och värdet vi vill ha är sidan som kommer **direkt efter 02:00**.
