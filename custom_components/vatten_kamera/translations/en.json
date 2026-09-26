@@ -34,6 +34,9 @@
       "niva": {
         "name": "Level"
       },
+      "flode": {
+        "name": "Flow"
+      },
       "senast_last": {
         "name": "Last read"
       },
@@ -50,6 +53,9 @@
     "binary_sensor": {
       "lasning_ok": {
         "name": "Last read OK"
+      },
+      "lackage": {
+        "name": "Leak"
       }
     },
     "button": {

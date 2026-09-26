@@ -1,10 +1,10 @@
-"""Binarsensorn: gick senaste lasningen bra?"""
+"""Binarsensorerna: gick senaste lasningen bra, och rinner det hela tiden?"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -20,7 +20,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: VattenKameraCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([LasningOkSensor(coordinator, entry)])
+    async_add_entities(
+        [LasningOkSensor(coordinator, entry), LackageSensor(coordinator, entry)]
+    )
 
 
 class LasningOkSensor(VattenKameraEntity, BinarySensorEntity):
@@ -51,4 +53,42 @@ class LasningOkSensor(VattenKameraEntity, BinarySensorEntity):
         extra = self.readings_extra
         if reading is not None:
             extra["visas_som"] = reading.display
+        return extra
+
+
+class LackageSensor(VattenKameraEntity, BinarySensorEntity):
+    """Pa nar flodet legat over troskeln hela tiden - da rinner det.
+
+    Tjansten raknar ut det ur historiken (flera lasningar i rad over troskeln),
+    sa ett enstaka flode nar pumpen kor larmar inte. Är flodet okant ar
+    entiteten otillganglig i stallet for ett falskt "allt bra".
+    """
+
+    _attr_translation_key = "lackage"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_icon = "mdi:water-alert"
+
+    def __init__(self, coordinator: VattenKameraCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_lackage"
+
+    @property
+    def is_on(self) -> bool | None:
+        health = self.coordinator.health
+        if not health or "lackage" not in health:
+            return None
+        return bool(health.get("lackage"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        reading = self.coordinator.reading
+        health = self.coordinator.health
+        extra: dict[str, Any] = {
+            "varfor": health.get("lackage_text"),
+            "troskel": health.get("lackage_troskel"),
+            "minuter": health.get("lackage_minuter"),
+        }
+        if reading is not None:
+            extra["flode"] = reading.flow_numeric
+            extra["flode_enhet"] = reading.flow_unit
         return extra

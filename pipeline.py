@@ -76,11 +76,19 @@ class RunSummary:
     details: list[dict] = field(default_factory=list)
     # Vart vardet gick: "mqtt", "rest", "mqtt+rest" eller tomt.
     published_to: str = ""
+    # Flodet just nu - sidan efter vardet i varvet (klockan -> 02:00 -> vardet ->
+    # flodet). Det sager om vatten rinner, och ar underlaget for lackagelarmet.
+    flow: str | None = None
+    flow_numeric: float | None = None
+    flow_confidence: float = 0.0
+    flow_votes: int = 0
+    # Varför flodet saknas, när det inte gick att läsa.
+    flow_note: str = ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, ensure_ascii=False)
 
-    def to_status(self, *, unit: str = "", decimals: int = 0) -> dict:
+    def to_status(self, *, unit: str = "", decimals: int = 0, flow_unit: str = "") -> dict:
         """Senaste lasningen som JSON.
 
         Det ar vad vardestjansten svarar pa /api/latest, och vad Home
@@ -107,6 +115,13 @@ class RunSummary:
             "bilder_i": self.frames_dir,
             "published_to": self.published_to,
             "error": self.error,
+            # Flodet just nu, och enheten for det (kan skilja sig fran nivan).
+            "flow": self.flow,
+            "flow_numeric": self.flow_numeric,
+            "flow_confidence": round(self.flow_confidence, 3),
+            "flow_votes": self.flow_votes,
+            "flow_unit": flow_unit,
+            "flow_note": self.flow_note,
         }
 
 
@@ -138,6 +153,7 @@ def write_status(
     *,
     unit: str = "",
     decimals: int = 0,
+    flow_unit: str = "",
     path: Path = LATEST_FILE,
 ) -> None:
     """Skriver senaste lasningen till latest.json.
@@ -149,7 +165,11 @@ def write_status(
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(
-            json.dumps(summary.to_status(unit=unit, decimals=decimals), indent=2, ensure_ascii=False),
+            json.dumps(
+                summary.to_status(unit=unit, decimals=decimals, flow_unit=flow_unit),
+                indent=2,
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
         os.replace(tmp, path)
@@ -385,6 +405,13 @@ class NightlyRunner:
         deadline = time.time() + duration_s
         index = 0
         ready = ReadyTracker()
+        # Andra halvan av korningen: flodessidan kommer direkt efter vardet i
+        # varvet. Vi stannar forst nar bada sidorna ar fangade (eller tiden ar
+        # slut), sa att flodet kommer med utan en egen korning.
+        varde: str | None = None
+        flode_rakning: Counter[str] = Counter()
+        flode_fangat = False
+        flode_frist: float | None = None
 
         while time.time() < deadline:
             frame_started = time.time()
@@ -409,20 +436,46 @@ class NightlyRunner:
             log.debug("bild %d tagen", index)
 
             # Displayen visar vardet strax efter att den visat 02:00. Sa snart vi
-            # sett den sekvensen nagra bilder i rad ar lasningen klar - da slutar
-            # vi titta i stallet for att sta kvar resten av fonstret.
-            if stop_when_ready and ready.feed(
-                read_image(
-                    image_from_crop(crop, self.calibration.roi),
-                    self.calibration,
-                    reader_cfg,
-                )
-            ):
+            # sett den sekvensen nagra bilder i rad ar vardet fangat - och da
+            # tittar vi vidare efter flodessidan som kommer direkt efter.
+            lasning = read_image(
+                image_from_crop(crop, self.calibration.roi),
+                self.calibration,
+                reader_cfg,
+            )
+
+            if stop_when_ready:
+                if flode_fangat:
+                    break
+                if flode_frist is None:
+                    if ready.feed(lasning):
+                        varde = ready.value
+                        log.info(
+                            "displayen visade spolttiden och vardesidan efter den (%r i %d bilder"
+                            " i rad) - vardet ar fangat",
+                            ready.value,
+                            ready.streak,
+                        )
+                        if not (cfg.read_flow and cfg.flow_extra_s > 0):
+                            break
+                        flode_frist = time.time() + cfg.flow_extra_s
+                elif (
+                    lasning.ok
+                    and lasning.confidence > 0.0
+                    and lasning.value
+                    and lasning.value != varde
+                ):
+                    # En last sida som inte ar vardet: det ar flodet.
+                    flode_rakning[lasning.value] += 1
+                    if flode_rakning.most_common(1)[0][1] >= READY_FRAMES:
+                        flode_fangat = True
+                        log.info("flodessidan visade %r - korningen ar klar", lasning.value)
+                        break
+
+            if flode_frist is not None and time.time() >= flode_frist:
                 log.info(
-                    "displayen visade spolttiden och vardesidan efter den (%r i %d bilder i rad)"
-                    " - lasningen ar klar",
-                    ready.value,
-                    ready.streak,
+                    "flodessidan syntes inte inom %.0f s efter vardet - korningen stannar anda",
+                    cfg.flow_extra_s,
                 )
                 break
 
@@ -609,11 +662,16 @@ class NightlyRunner:
             # rostas bara det som kommer efter spolttidssidan.
             target, page_note = voting_targets(readings)
             voted = {id(reading) for reading in target}
+            # Flodet star pa sidan efter vardet. Den rostas for sig, och bara om
+            # den gar att lasa - ett felaktigt flode skulle kunna se ut som ett
+            # lackage och larma i onodan.
+            flode_sida, flow_note = flow_targets(readings, _page_value_av(target))
+            voted |= {id(reading) for reading in flode_sida}
             details = [
                 {
                     "grupp": number,
                     "bilder": max(1, reading.weight),
-                    "sida": page_kind(reading),
+                    "sida": "flode" if id(reading) in {id(r) for r in flode_sida} else page_kind(reading),
                     "varde": reading.value,
                     "konfidens": round(reading.confidence, 2),
                     "rostad": id(reading) in voted,
@@ -643,6 +701,18 @@ class NightlyRunner:
                 result.votes,
                 result.confidence,
             )
+
+            # Flodet: en rostning till, pa sidan efter vardet.
+            flode = consensus(
+                flode_sida,
+                min_agreement=cfg.min_agreement,
+                min_confidence=cfg.min_confidence,
+                decimals=self.cfg.reader.decimals,
+            ) if flode_sida else Consensus(value=None, votes=0, total=0, confidence=0.0)
+            if flode.value is not None:
+                log.info("flodet: %s %s (konfidens %.2f)", flode.value, cfg.flow_unit, flode.confidence)
+            elif cfg.read_flow:
+                log.info("inget flode i den har korningen (%s)", flow_note or "sidan syntes inte")
 
             evidence = self._pick_evidence(saved, result.value)
             if evidence is None:
@@ -697,13 +767,27 @@ class NightlyRunner:
                 page_note=page_note,
                 details=details,
                 published_to=published_to,
+                flow=flode.value,
+                flow_numeric=flode.numeric,
+                flow_confidence=flode.confidence,
+                flow_votes=flode.votes,
+                flow_note=flow_note,
             )
 
             # Senaste lasningen pa disk, for vardestjansten och Home Assistant.
             # Skrivs aven nar lasningen misslyckades, sa att HA ser att nagot ar
             # fel i stallet for att visa ett gammalt varde.
-            status = summary.to_status(unit=self.cfg.mqtt.unit, decimals=self.cfg.reader.decimals)
-            write_status(summary, unit=self.cfg.mqtt.unit, decimals=self.cfg.reader.decimals)
+            status = summary.to_status(
+                unit=self.cfg.mqtt.unit,
+                decimals=self.cfg.reader.decimals,
+                flow_unit=self.cfg.run.flow_unit,
+            )
+            write_status(
+                summary,
+                unit=self.cfg.mqtt.unit,
+                decimals=self.cfg.reader.decimals,
+                flow_unit=self.cfg.run.flow_unit,
+            )
             # ... och i historiken, som granssnittets graf ritas ur.
             history.append(status)
 
@@ -1126,6 +1210,69 @@ def _page_value(readings: list[Reading], window: list[int]) -> str | None:
     # Ingen grupp blev stor nog (ett kort fonster): da ar ordningen i sidvarvet
     # enda ledtraden.
     return readings[window[0]].value
+
+
+def _page_value_av(target: list[Reading]) -> str | None:
+    """Vardet pa den rostade vardesidan (den tyngsta gruppen)."""
+    vikt: Counter[str] = Counter()
+    for reading in target:
+        if reading.value:
+            vikt[reading.value] += max(1, reading.weight)
+    if not vikt:
+        return None
+    return vikt.most_common(1)[0][0]
+
+
+def flow_targets(readings: list[Reading], value: str | None) -> tuple[list[Reading], str]:
+    """Flodessidan: sidan efter vardesidan i varvet.
+
+    Displayen visar sina sidor i samma ordning hela tiden:
+
+        klockan  ->  spolttiden 02:00  ->  VARDET  ->  flodet  ->  klockan ...
+
+    Flodet star alltsa direkt efter vardet, och bada sidorna ser likadana ut for
+    avlasaren - bara ordningen skiljer dem at. Matt 2026-09-26: vardet '037' i
+    6-8 bilder, sedan '000' i 7 bilder, sedan klockan '1223', sedan spolttiden
+    '0200'. Bada vardesidorna gick att lasa med hog konfidens (flodets '000' gav
+    0.73-0.78), sa det ar ordningen som avgor.
+
+    Returnerar lasningarna pa flodessidan och en anteckning. Tom lista betyder
+    att flodessidan inte syntes eller inte gick att lasa - da publiceras inget
+    flode: ett felaktigt flode skulle kunna se ut som ett lackage och larma i
+    onodan.
+    """
+    if not value:
+        return [], "inget varde att jamfora med"
+
+    varde_sist: int | None = None
+    for position, reading in enumerate(readings):
+        if reading.value == value and page_kind(reading) == "varde":
+            varde_sist = position
+    if varde_sist is None:
+        return [], "vardesidan hittades inte i bilderna"
+
+    for position in range(varde_sist + 1, len(readings)):
+        reading = readings[position]
+        kind = page_kind(reading)
+        if kind == "tid":
+            # Klockan eller spolttiden: varvet har gatt vidare forbi flodet.
+            return [], "ingen flodessida i bilderna"
+        if kind != "varde" or not reading.value or reading.value == value:
+            continue
+        return _page_readings(readings, position, reading.value), ""
+
+    return [], "ingen flodessida i bilderna"
+
+
+def _page_readings(readings: list[Reading], start: int, value: str) -> list[Reading]:
+    """Alla grupper fran `start` som visar samma sida (den kan vara delad av flimmer)."""
+    sida: list[Reading] = []
+    for reading in readings[start:]:
+        if sida and page_kind(reading) == "tid":
+            break
+        if reading.value == value:
+            sida.append(reading)
+    return sida
 
 
 def _safe_name(value: str | None) -> str:

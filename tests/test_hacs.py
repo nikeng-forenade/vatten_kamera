@@ -69,6 +69,20 @@ def test_manifest_ar_giltigt() -> None:
         assert manifest.get(nyckel), f"{nyckel} saknas i manifest.json"
 
 
+def test_flodet_och_lackaget_finns_i_integrationen() -> None:
+    """Flodet och lackagelarmet ska vara egna entiteter i Home Assistant."""
+    sensor = (INTEGRATION / "sensor.py").read_text(encoding="utf-8")
+    binar = (INTEGRATION / "binary_sensor.py").read_text(encoding="utf-8")
+
+    assert "class FlodeSensor" in sensor
+    assert '_attr_translation_key = "flode"' in sensor
+    assert "class LackageSensor" in binar
+    assert '_attr_translation_key = "lackage"' in binar
+    # Flodet kommer ur senaste lasningen, lackaget ur tjanstens halsa.
+    assert "flow_numeric" in (INTEGRATION / "coordinator.py").read_text(encoding="utf-8")
+    assert 'health.get("lackage")' in binar
+
+
 def test_hacs_json_ar_giltig() -> None:
     hacs = las_json(ROT / "hacs.json")
 

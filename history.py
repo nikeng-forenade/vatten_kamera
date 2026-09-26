@@ -108,3 +108,62 @@ def _tid(row: dict[str, Any]) -> datetime | None:
         return datetime.fromisoformat(text).replace(tzinfo=None)
     except ValueError:
         return None
+
+
+def flode_larm(
+    *,
+    troskel: float,
+    minuter: float,
+    path: Path | None = None,
+    nu: datetime | None = None,
+) -> dict[str, Any]:
+    """Har flodet legat over troskeln hela tiden de senaste minuterna?
+
+    Ett flode over troskeln en enstaka lasning ar normalt - pumpen kan kora en
+    stund. Ligger det kvar varje lasning i minst `minuter` minuter rinner det
+    hela tiden, och da ar det vart att larma (lackage eller oppen ventil).
+
+    Kraver minst tva lasningar med kant flode i fonstret, och att den aldsta av
+    dem ligger nara hela fonstret bort - annars kunde en enda farsk lasning
+    larma direkt. Utan de tva sparrarna skulle ett kort avbrott i lasningen se
+    ut som ett lackage.
+    """
+    nu = nu or datetime.now()
+    fonster = max(1.0, minuter / 60.0)
+    grans = nu - timedelta(minutes=minuter)
+
+    varden: list[tuple[datetime, float]] = []
+    for rad in read(hours=fonster * 2, path=path):
+        tid = _tid(rad)
+        flode = rad.get("flow_numeric")
+        if tid is None or tid < grans or not isinstance(flode, (int, float)):
+            continue
+        varden.append((tid, float(flode)))
+
+    if len(varden) < 2:
+        return {
+            "larm": False,
+            "flode": varden[-1][1] if varden else None,
+            "antal": len(varden),
+            "text": "for fa lasningar med kant flode an",
+        }
+
+    lagst = min(varde for _, varde in varden)
+    hogst = max(varde for _, varde in varden)
+    tackt = (nu - min(tid for tid, _ in varden)).total_seconds() / 60.0
+    svar = {"flode": varden[-1][1], "antal": len(varden)}
+
+    if lagst < troskel:
+        return {**svar, "larm": False, "text": f"flodet har varit under {troskel:g}"}
+    if tackt < minuter * 0.8:
+        return {
+            **svar,
+            "larm": False,
+            "text": f"flodet har varit over {troskel:g} i {tackt:.0f} min (kortare an {minuter:g})",
+        }
+
+    return {
+        **svar,
+        "larm": True,
+        "text": f"flodet har legat pa {lagst:.2f}-{hogst:.2f} i {tackt:.0f} minuter",
+    }

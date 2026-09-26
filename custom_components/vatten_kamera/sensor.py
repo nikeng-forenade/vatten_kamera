@@ -1,4 +1,4 @@
-"""Sensorerna: nivan, nar den lastes och tjanstens lage."""
+"""Sensorerna: nivan, flodet, nar den lastes och tjanstens lage."""
 
 from __future__ import annotations
 
@@ -22,11 +22,12 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Skapar de tre sensorerna."""
+    """Skapar sensorerna."""
     coordinator: VattenKameraCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
             NivaSensor(coordinator, entry),
+            FlodeSensor(coordinator, entry),
             SenastLastSensor(coordinator, entry),
             StatusSensor(coordinator, entry),
         ]
@@ -74,6 +75,56 @@ class NivaSensor(VattenKameraEntity, SensorEntity):
             "siffror": reading.value,
             "visas_som": reading.display,
         }
+        extra.update(self.readings_extra)
+        return extra
+
+
+class FlodeSensor(VattenKameraEntity, SensorEntity):
+    """Flodet just nu - sidan efter vardet pa displayen.
+
+    Ett flode som ligger kvar hela tiden ar det som avslojar ett lackage; en
+    pump som kor ger flode en stund och sedan ar det noll igen.
+    """
+
+    _attr_translation_key = "flode"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:water-pump"
+
+    def __init__(self, coordinator: VattenKameraCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_flode"
+
+    @property
+    def native_value(self) -> float | None:
+        reading = self.coordinator.reading
+        if reading is None:
+            return None
+        return reading.flow_numeric
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        reading = self.coordinator.reading
+        if reading is None or not reading.flow_unit:
+            return None
+        return reading.flow_unit
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        reading = self.coordinator.reading
+        if reading is None:
+            return {}
+        extra: dict[str, Any] = {
+            "siffror": reading.flow,
+            "visas_som": reading.display,
+        }
+        if reading.flow_note:
+            extra["varfor_inget_flode"] = reading.flow_note
+        health = self.coordinator.health
+        if health:
+            extra["lackage"] = health.get("lackage")
+            extra["lackage_text"] = health.get("lackage_text")
+            extra["troskel"] = health.get("lackage_troskel")
+            extra["minuter"] = health.get("lackage_minuter")
         extra.update(self.readings_extra)
         return extra
 

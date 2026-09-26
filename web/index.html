@@ -71,6 +71,7 @@
   #graf { width: 100%; height: 220px; display: block; }
   #graf .rutnat { stroke: var(--line, #2a2f3a); stroke-width: 1; }
   #graf .linje { fill: none; stroke: #4da3ff; stroke-width: 2; }
+  #graf .linje.flode { stroke: #7aa7d9; stroke-width: 1.2; stroke-dasharray: 4 3; opacity: .85; }
   #graf .punkt { fill: #4da3ff; cursor: pointer; }
   #graf .punkt:hover { fill: #ffd166; }
   #graf .vald { fill: #ffd166; stroke: #fff; stroke-width: 1.5; }
@@ -182,6 +183,9 @@
     (<code>main.py daemon</code>, eller systemd-tjänsten <code>vatten-kamera</code>) så läser den
     enligt läsläget.
   </p>
+  <p class="hint warn" id="lackageVarning" hidden>
+    <b>Flöde hela tiden</b> — <span id="lackageText"></span>
+  </p>
   <p class="hint warn" id="kalibreringVarning" hidden>
     <b>Kalibreringen saknas</b> — tjänsten kan inte läsa displayen förrän den finns. Kör
     <code>cd /opt/vattenkamera &amp;&amp; .venv/bin/python main.py calibrate --frames 16 --save</code>
@@ -285,6 +289,13 @@ async function refreshStatus() {
       `konfidens <b>${latest.confidence}</b> · <b>${latest.votes}</b> av ${latest.frames} bilder · ` +
       `läst <b>${(latest.read_at || '').replace('T', ' ')}</b>` +
       (latest.published_to ? ` · publicerad via <b>${latest.published_to}</b>` : '');
+    // Flodet star pa sidan efter vardet i varvet - det sager om vatten rinner.
+    if (typeof latest.flow_numeric === 'number') {
+      $('valueMeta').innerHTML +=
+        ` · flöde <b>${latest.flow_numeric.toFixed(2)}</b> ${latest.flow_unit || ''}`;
+    } else if (latest.flow_note) {
+      $('valueMeta').innerHTML += ` · flöde: <i>${latest.flow_note}</i>`;
+    }
   } else {
     $('value').textContent = '–';
     $('value').className = 'value stale';
@@ -305,6 +316,14 @@ async function refreshStatus() {
   $('daemonVarning').hidden = !!health.loop;
   // Utan kalibrering laser tjansten ingenting - saga det i stallet for att tiga.
   $('kalibreringVarning').hidden = health.kalibrering !== false;
+  // Rinner det hela tiden? Da star det har, med troskeln som galler.
+  $('lackageVarning').hidden = !health.lackage;
+  if (health.lackage) {
+    $('lackageText').innerHTML =
+      `Flödet har legat över <b>${health.lackage_troskel}</b> i minst ` +
+      `<b>${health.lackage_minuter}</b> minuter — något rinner hela tiden? ` +
+      `<span class="dim">(${health.lackage_text || ''})</span>`;
+  }
   // Utan kalibrering laser tjansten ingenting - saga det, i stallet for tystnad.
   $('kalibreringVarning').hidden = health.kalibrering !== false;
 
@@ -347,6 +366,9 @@ function ritaGraf(punkter) {
   svg.innerHTML = '';
 
   const giltiga = punkter.filter((p) => typeof p.varde === 'number');
+  // Flodet ritas som en egen, tunn linje. Det ar samma sorts tal (0.00-9.99),
+  // sa bada serierna far plats pa samma skala.
+  const giltigaFlode = punkter.filter((p) => typeof p.flode === 'number');
   if (giltiga.length === 0) {
     $('grafInfo').textContent = punkter.length
       ? `${punkter.length} läsningar, men inget värde kunde läsas`
@@ -354,10 +376,11 @@ function ritaGraf(punkter) {
     return;
   }
   $('grafInfo').textContent = `${giltiga.length} läsningar` +
-    (punkter.length > giltiga.length ? ` · ${punkter.length - giltiga.length} utan värde` : '');
+    (punkter.length > giltiga.length ? ` · ${punkter.length - giltiga.length} utan värde` : '') +
+    (giltigaFlode.length ? ` · ${giltigaFlode.length} med flöde` : '');
 
   const tider = punkter.map((p) => new Date(p.tid).getTime()).filter((t) => !isNaN(t));
-  const varden = giltiga.map((p) => p.varde);
+  const varden = giltiga.map((p) => p.varde).concat(giltigaFlode.map((p) => p.flode));
   const t0 = Math.min(...tider), t1 = Math.max(...tider);
   let vMin = Math.min(...varden), vMax = Math.max(...varden);
   if (vMax - vMin < 0.05) {           // ett nastan plant varde ska anda synas
@@ -405,6 +428,25 @@ function ritaGraf(punkter) {
   if (bit.length > 1) bitar.push(bit.join(' '));
   bitar.forEach((pts) => delar.push(`<polyline class="linje" points="${pts}"></polyline>`));
 
+  // Flodet, med samma luckregel: en lucka i historiken ska synas som en lucka.
+  const sorteradeFlode = punkter
+    .filter((p) => typeof p.flode === 'number' && !isNaN(new Date(p.tid).getTime()))
+    .sort((a, b) => new Date(a.tid) - new Date(b.tid));
+  let flodeBit = [];
+  let flodeForra = null;
+  const flodeBitar = [];
+  sorteradeFlode.forEach((p) => {
+    const t = new Date(p.tid).getTime();
+    if (flodeForra !== null && t - flodeForra > LUCKA_MS && flodeBit.length) {
+      flodeBitar.push(flodeBit.join(' '));
+      flodeBit = [];
+    }
+    flodeBit.push(`${x(t)},${y(p.flode)}`);
+    flodeForra = t;
+  });
+  if (flodeBit.length > 1) flodeBitar.push(flodeBit.join(' '));
+  flodeBitar.forEach((pts) => delar.push(`<polyline class="linje flode" points="${pts}"></polyline>`));
+
   // Punkter utan varde (misslyckad lasning) ritas langst ned, sa att aven de syns.
   punkter.forEach((p, i) => {
     const t = new Date(p.tid).getTime();
@@ -414,7 +456,9 @@ function ritaGraf(punkter) {
     const klass = i === grafVald ? 'punkt vald' : (p.ok ? 'punkt' : 'punkt misslyckad');
     const titel = utanVarde
       ? `Ingen lasning ${String(p.tid).replace('T', ' ')}`
-      : `${p.visas_som || p.varde} · ${String(p.tid).replace('T', ' ')}`;
+      : `${p.visas_som || p.varde}`
+        + (typeof p.flode === 'number' ? ` · flöde ${p.flode.toFixed(2)}` : '')
+        + ` · ${String(p.tid).replace('T', ' ')}`;
     delar.push(
       `<circle class="${klass}" data-i="${i}" cx="${x(t)}" cy="${y(v)}" r="${utanVarde ? 3 : 4}">` +
       `<title>${titel}</title></circle>`

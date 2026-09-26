@@ -178,6 +178,9 @@ def read_history(hours: float = 24.0, limit: int = 2000) -> dict[str, Any]:
                 "bilder": entry.get("frames"),
                 "bild_url": frame_url(entry.get("bild")),
                 "fel": entry.get("error") or "",
+                # Flodet just nu, sa att grafen kan rita det som en egen linje.
+                "flode": entry.get("flow_numeric"),
+                "flode_text": entry.get("flow"),
             }
         )
     return {"ok": True, "antal": len(punkter), "punkter": punkter}
@@ -593,6 +596,8 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
         def _health(self) -> dict[str, Any]:
             from config import load_config
 
+            import history
+
             try:
                 cfg = load_config()
             except Exception as exc:  # noqa: BLE001
@@ -600,6 +605,10 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
 
             state = get_state()
             latest = read_latest()
+            lackage = history.flode_larm(
+                troskel=cfg.run.flow_warn,
+                minuter=cfg.run.flow_warn_minutes,
+            )
             age = None
             if latest.get("read_at"):
                 try:
@@ -634,6 +643,14 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
                 # Finns kalibreringen? Utan den kan tjansten inte lasa, och da
                 # visar granssnittet en forklaring i stallet for tystnad.
                 "kalibrering": cfg.calibration_file.exists(),
+                # Flodet just nu, och om det legat kvar sa lange att det ser ut
+                # som ett lackage (eller en oppen ventil).
+                "flode": latest.get("flow_numeric"),
+                "flode_enhet": latest.get("flow_unit") or cfg.run.flow_unit,
+                "lackage": bool(lackage.get("larm")),
+                "lackage_text": lackage.get("text", ""),
+                "lackage_troskel": cfg.run.flow_warn,
+                "lackage_minuter": cfg.run.flow_warn_minutes,
                 "enhet": cfg.mqtt.unit,
                 "aldsta_lasning_s": age,
                 "adress": f"http://{socket.gethostname()}:{PORT}",

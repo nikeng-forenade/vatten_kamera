@@ -62,6 +62,12 @@ class Reading:
     version: str
     error: str
     published_to: str
+    # Flodet just nu - sidan efter vardet i varvet. Det sager om vatten rinner,
+    # och ar underlaget for lackagelarmet.
+    flow: str | None = None
+    flow_numeric: float | None = None
+    flow_unit: str = ""
+    flow_note: str = ""
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any], image_url: str | None) -> "Reading":
@@ -81,6 +87,10 @@ class Reading:
             version=str(payload.get("version") or ""),
             error=str(payload.get("error") or ""),
             published_to=str(payload.get("published_to") or ""),
+            flow=payload.get("flow"),
+            flow_numeric=_as_float(payload.get("flow_numeric")),
+            flow_unit=str(payload.get("flow_unit") or ""),
+            flow_note=str(payload.get("flow_note") or ""),
         )
 
 

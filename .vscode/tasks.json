@@ -488,6 +488,48 @@
 				"--alla"
 			],
 			"group": "build"
+		},
+		{
+			"label": "Mät flödessidan: hämta bildserie",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\grab.py",
+				"--frames",
+				"40",
+				"--interval",
+				"1.5",
+				"--out",
+				"captures\\flode"
+			],
+			"isBackground": false,
+			"group": "build"
+		},
+		{
+			"label": "Läs flödesserien",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"tools\\fit_cells.py",
+				"captures\\flode",
+				"--read"
+			],
+			"isBackground": false,
+			"group": "build"
+		},
+		{
+			"label": "Testa flodet lokalt",
+			"type": "shell",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+			"args": [
+				"main.py",
+				"read",
+				"--seconds",
+				"60",
+				"--spara"
+			],
+			"isBackground": false,
+			"group": "build"
 		}
 	]
 }

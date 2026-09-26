@@ -186,6 +186,48 @@ def test_health_berattar_om_kalibreringen_finns(server: StatusServer) -> None:
     assert isinstance(data["kalibrering"], bool)
 
 
+def test_health_berattar_om_flodet_och_lackage(server: StatusServer) -> None:
+    """Granssnittet och Home Assistant ska kunna se om nagot rinner hela tiden."""
+    status, data = hamta(server, "/api/health")
+
+    assert status == 200
+    assert isinstance(data["lackage"], bool)
+    assert data["lackage_text"]
+    assert data["lackage_troskel"] > 0
+    assert data["lackage_minuter"] > 0
+    assert data["flode_enhet"]
+
+
+def test_historiken_ger_flodet_for_grafen(
+    server: StatusServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Grafen ska kunna rita flodet som en egen linje."""
+    import history
+    from datetime import datetime
+
+    fil = tmp_path / "history.jsonl"
+    nu = datetime.now().replace(microsecond=0).isoformat(timespec="seconds")
+    history.write(
+        [
+            {
+                "read_at": nu,
+                "numeric": 0.37,
+                "display": "0.37",
+                "ok": True,
+                "flow_numeric": 0.12,
+                "flow": "0.12",
+            }
+        ],
+        path=fil,
+    )
+    monkeypatch.setattr(history, "HISTORY_FILE", fil)
+
+    status, data = hamta(server, "/api/history?hours=24")
+
+    assert status == 200
+    assert data["punkter"][0]["flode"] == 0.12
+
+
 def test_granssnittet_varnar_nar_kalibreringen_saknas() -> None:
     """Varningen ska finnas bade i sidan och styras av svaret fran /api/health."""
     from pathlib import Path

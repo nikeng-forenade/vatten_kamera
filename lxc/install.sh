@@ -181,6 +181,14 @@ THRESHOLD=250
 # I lage intervall (standard) anvands inte RUN_AT alls.
 MIN_CONFIDENCE=0.35
 MIN_AGREEMENT=3
+
+# Flodet: sidan efter vardet i varvet. Ligger det kvar hela tiden rinner det -
+# da larmar tjansten (granssnittet och Home Assistant), och vardet syns i grafen.
+READ_FLOW=true
+FLOW_WARN=0.05
+FLOW_WARN_MINUTES=30
+FLOW_UNIT=l/h
+FLOW_EXTRA_S=20
 # intervall = laser hela tiden (var EVERY_MINUTES minut, 0 = sa snart den forra
 # ar klar) · manuell = bara nar nagon trycker "Las nu" · natt = en gang per dygn.
 MODE=${MODE}

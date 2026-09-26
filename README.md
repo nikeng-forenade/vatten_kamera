@@ -253,6 +253,11 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `STOP_WHEN_READY` | `true` | Sluta så snart värdet är fångat |
 | `MIN_AGREEMENT` | `3` | Antal bilder som måste vara eniga |
 | `MIN_CONFIDENCE` | `0.75` | Minsta konfidens per siffra |
+| `READ_FLOW` | `true` | Läs även flödet (sidan efter värdet). `false` = bara nivån |
+| `FLOW_WARN` | `0.05` | Larma när flödet legat över detta |
+| `FLOW_WARN_MINUTES` | `30` | ...varje läsning i så här många minuter |
+| `FLOW_UNIT` | `l/h` | Enheten som visas för flödet (kontrollera mot pumpen) |
+| `FLOW_EXTRA_S` | `20` | Hur länge körningen letar efter flödessidan innan den stannar |
 | `PUBLISH_TO` | `auto` | `auto`, `mqtt`, `rest`, `bada` eller `av` |
 | `HA_BASE_URL`, `HA_TOKEN` | – | Home Assistant |
 | `HA_LIGHT_ENTITY` | tom | Lampan vid pumpen. **Tom = ingen lampstyrning** |
@@ -380,6 +385,8 @@ HACS behöver också en **beskrivning** på repot, och mår bäst av ämnena `ha
 | Entitet | Betydelse |
 |---|---|
 | `sensor.vatten_kamera_niva` | Värdet (`0.58`). Attribut: `siffror`, `visas_som`, `konfidens`, `roster`, `bilder`, `last`, `bild`, `lage`, `nasta_korning` |
+| `sensor.vatten_kamera_flode` | Flödet just nu (`0.00`). Attribut: `lackage`, `troskel`, `minuter` |
+| `binary_sensor.vatten_kamera_lackage` | Är **på** när flödet legat kvar hela tiden — något rinner |
 | `sensor.vatten_kamera_senast_last` | När värdet lästes (tidsstämpel) |
 | `sensor.vatten_kamera_status` | `Last` / `Laser nu` / `Ingen lasning` / `Okontaktbar` |
 | `binary_sensor.vatten_kamera_lasning_ok` | Gick senaste läsningen bra? |
@@ -457,6 +464,42 @@ run.cmd tools/import_history.py
 `history.jsonl` håller de senaste 5 000 läsningarna. I Home Assistant behövs ingen egen
 historik: sensorn `sensor.vatten_kamera_niva` loggas av HA:s egen recorder, och
 tidsstämpeln i `sensor.vatten_kamera_senast_last` visar när värdet är från.
+
+## Flödet och läckagelarm
+
+Displayen visar inte bara hur mycket vatten som är kvar — den växlar mellan fyra sidor i en
+fast ordning:
+
+```
+klockan  →  spolttiden 02:00  →  VÄRDET  →  FLÖDET  →  klockan …
+```
+
+De två värdesidorna ser **likadana** ut för avläsaren (tre siffror, första positionen
+släckt), så det är ordningen i varvet som avgör vilken som är vilken. Tjänsten läser därför
+båda: värdet som vanligt, och **flödet** på sidan efter. Körningen tittar några sekunder
+längre än förut (`FLOW_EXTRA_S`) och stannar när båda sidorna är fångade.
+
+Flödet hamnar i `latest.json`, i historiken, som en egen linje i grafen och i Home Assistant.
+
+### Larmet
+
+Ett flöde över `FLOW_WARN` **en enstaka gång** är normalt — pumpen kan ju köra en stund.
+Ligger det däremot kvar **varje läsning** i `FLOW_WARN_MINUTES` minuter rinner det hela
+tiden, och då:
+
+* visas en varning i gränssnittet: *flödet har legat på 0,12–0,13 i 31 minuter*
+* blir `binary_sensor.vatten_kamera_lackage` **på** i Home Assistant — larma på den
+
+Går flödessidan inte att läsa publiceras **inget** flöde (hellre inget än ett felaktigt),
+och ett flöde som saknas kan aldrig bli ett larm. Vill du bara läsa nivån: sätt
+`READ_FLOW=false` eller `FLOW_EXTRA_S=0`.
+
+### Mätt mot displayen (2026-09-26)
+
+En serie på 40 bilder över ett helt varv gav ordningen `037 → 000 → 1223 → 0200 → 037 …`:
+värdet i 6–8 bilder, flödet i 7, klockan i 8 och spolttiden i 7. Båda värdesidorna lästes
+med hög konfidens (flödets `000` gav 0,73–0,78) — alltså är det **bara ordningen** som
+skiljer dem åt, precis som koden antar.
 
 ## Kamerans uppgifter ligger bara hos dig
 

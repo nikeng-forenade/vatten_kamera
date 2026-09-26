@@ -34,6 +34,9 @@
       "niva": {
         "name": "Niva"
       },
+      "flode": {
+        "name": "Flöde"
+      },
       "senast_last": {
         "name": "Senast last"
       },
@@ -50,6 +53,9 @@
     "binary_sensor": {
       "lasning_ok": {
         "name": "Lasningen gick bra"
+      },
+      "lackage": {
+        "name": "Lackage"
       }
     },
     "button": {

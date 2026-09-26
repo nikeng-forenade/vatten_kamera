@@ -333,6 +333,14 @@ def cmd_read(cfg: Config, args: argparse.Namespace) -> int:
         print(f"roster        : {summary.votes}/{summary.frames_taken}  konfidens {summary.confidence:.2f}")
     else:
         print(f"inget varde kunde faststallas ({summary.error})")
+    # Flodet: sidan efter vardet i varvet. Ligger det kvar hela tiden rinner det.
+    if summary.flow_numeric is not None:
+        print(
+            f"FLODET        : {summary.flow_numeric:.{cfg.reader.decimals}f} "
+            f"{cfg.run.flow_unit}  (text {summary.flow!r}, konfidens {summary.flow_confidence:.2f})"
+        )
+    elif cfg.run.read_flow:
+        print(f"FLODET        : inget ({summary.flow_note or 'sidan syntes inte'})")
     if summary.frames_dir:
         print(f"bilder        : {summary.frames_dir}")
     return 0 if summary.value else 1

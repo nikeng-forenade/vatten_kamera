@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.16.0"
+VERSION = "0.17.0"
 
 ROOT = Path(__file__).resolve().parent
 
@@ -199,6 +199,23 @@ class RunConfig:
     group_threshold: float = 8.0
     # Sand notis till HA om lasningen misslyckas.
     notify_on_failure: bool = False
+    # --- Flodet -----------------------------------------------------------
+    # Flodet star pa sidan efter vardet i varvet
+    # (klockan -> spolttiden 02:00 -> vardet -> flodet), sa det lases i samma
+    # korning. Det sager om vatten rinner just nu, och ar det som lackagelarmet
+    # bygger pa: ligger flodet kvar hela tiden rinner det nagonsans.
+    read_flow: bool = True
+    # Hur lange vi tittar vidare efter att vardet ar fangat, for att fa med
+    # flodessidan. Den kommer direkt efter vardesidan, men en toning eller ett
+    # flimmer kan skjuta pa den - matt 2026-09-26 tog den 9-12 s att visa.
+    flow_extra_s: float = 20.0
+    # Larm nar flodet legat over troskeln varje lasning i sa har manga minuter.
+    # Pumpen kan ge flode en stund; ett lackage ligger kvar.
+    flow_warn: float = 0.05
+    flow_warn_minutes: float = 30.0
+    # Enhet for flodet (visas i granssnittet och i Home Assistant). Vad displayen
+    # visar for enhet ar inte kant - kontrollera mot pumpen och andra vid behov.
+    flow_unit: str = "l/h"
 
 
 @dataclass(frozen=True)
@@ -301,6 +318,11 @@ def load_config() -> Config:
         min_confidence=_get_float("MIN_CONFIDENCE", 0.75),
         group_threshold=_get_float("GROUP_THRESHOLD", 8.0),
         notify_on_failure=_get_bool("NOTIFY_ON_FAILURE", False),
+        read_flow=_get_bool("READ_FLOW", True),
+        flow_extra_s=_get_float("FLOW_EXTRA_S", 20.0),
+        flow_warn=_get_float("FLOW_WARN", 0.05),
+        flow_warn_minutes=_get_float("FLOW_WARN_MINUTES", 30.0),
+        flow_unit=_get("FLOW_UNIT", "l/h"),
     )
 
     reader = ReaderConfig(

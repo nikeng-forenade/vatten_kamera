@@ -151,6 +151,55 @@ FIELDS: tuple[Field, ...] = (
     _field("CLIP_BOTTOM", "Klipp bort nedtill (0-1)", "Displayen", kind="float", minimum=0, maximum=1),
     _field("REQUIRE_BLANK_FIRST", "Krav att forsta positionen ar slackt", "Displayen", kind="bool", default="false"),
     _field("REJECT_ALL_EIGHTS", "Forkasta 888", "Displayen", kind="bool", default="false"),
+    # --- Flodet ----------------------------------------------------------
+    # Flodet star pa sidan efter vardet i varvet. Det sager om vatten rinner
+    # just nu, och larmet bygger pa att det ligger kvar - inte pa en enstaka
+    # lasning (pumpen kan ju kora en stund).
+    _field(
+        "READ_FLOW",
+        "Las aven flodet",
+        "Flodet",
+        kind="bool",
+        default="true",
+        help="Flodet star pa sidan efter vardet i varvet. Av = las bara nivan.",
+    ),
+    _field(
+        "FLOW_WARN",
+        "Larma over detta flode",
+        "Flodet",
+        kind="float",
+        minimum=0,
+        maximum=100,
+        default="0.05",
+        help="Flodet maste ligga over troskeln varje lasning i nedanstaende antal minuter.",
+    ),
+    _field(
+        "FLOW_WARN_MINUTES",
+        "...i sa har manga minuter",
+        "Flodet",
+        kind="float",
+        minimum=1,
+        maximum=1440,
+        default="30",
+        help="Pumpen kan ge flode en stund - ett lackage ligger kvar.",
+    ),
+    _field(
+        "FLOW_UNIT",
+        "Enhet for flodet",
+        "Flodet",
+        default="l/h",
+        help="Visas i granssnittet och i Home Assistant. Kontrollera mot pumpen - vad displayen visar for enhet ar inte kant.",
+    ),
+    _field(
+        "FLOW_EXTRA_S",
+        "Titta vidare efter vardet (s)",
+        "Flodet",
+        kind="float",
+        minimum=0,
+        maximum=120,
+        default="20",
+        help="Hur lange korningen letar efter flodessidan innan den stannar. 0 = las inte flodet.",
+    ),
     # --- Rostningen ------------------------------------------------------
     _field("MIN_AGREEMENT", "Minsta antal roster", "Rostningen", kind="int", minimum=1, maximum=100),
     _field("MIN_CONFIDENCE", "Minsta konfidens per siffra", "Rostningen", kind="float", minimum=0, maximum=1),

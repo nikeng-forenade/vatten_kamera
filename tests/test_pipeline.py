@@ -10,7 +10,14 @@ Kor:  .venv/Scripts/python.exe -m pytest tests -q
 from __future__ import annotations
 
 from display_reader import consensus
-from pipeline import has_recharge_page, page_kind, readings_after_recharge, voting_targets
+from pipeline import (
+    _page_value_av,
+    flow_targets,
+    has_recharge_page,
+    page_kind,
+    readings_after_recharge,
+    voting_targets,
+)
 from segments import DecodeResult
 
 
@@ -52,6 +59,76 @@ def toning(text: str, confidence: float = 0.5) -> object:
 
 def annan_tidssida(text: str, bilder: int = 1) -> object:
     return reading(text, digits=list(text), confidence=0.0, bilder=bilder)
+
+
+def flodes_sida(text: str = "000", confidence: float = 0.75, bilder: int = 7) -> object:
+    """Displayens flodessida.
+
+    Den ser likadan ut som vardesidan for avlasaren - vardet i position 2-4 med
+    den forsta slackt - och bada kan lasas med hog konfidens. Det ar bara
+    ordningen i varvet som skiljer dem at. Matt 2026-09-26: vardet '037' i 6-8
+    bilder, sedan '000' i 7 bilder, sedan klockan '1223', sedan spolttiden.
+    """
+    return varde(text, confidence, bilder=bilder)
+
+
+def test_flodet_ar_sidan_efter_vardet() -> None:
+    """Varvet ar klockan -> 02:00 -> vardet -> flodet, och flodet lases sist."""
+    svep = [
+        varde("037", bilder=6),
+        flodes_sida("000"),
+        annan_tidssida("1223", bilder=8),
+        spoltid(bilder=7),
+        varde("037", bilder=8),
+        flodes_sida("000", bilder=4),
+    ]
+
+    sida, note = flow_targets(svep, "037")
+
+    assert note == ""
+    assert {item.value for item in sida} == {"000"}
+    # Flodet far aldrig bli vardet: det som rostas fram ar fortfarande 037.
+    assert _page_value_av(voting_targets(svep)[0]) == "037"
+
+
+def test_annat_flode_an_noll_lases_ocksa() -> None:
+    """Kor pumpen star det ett varde pa flodessidan - da ska det med."""
+    svep = [
+        annan_tidssida("1223", bilder=6),
+        spoltid(bilder=6),
+        varde("035", bilder=7),
+        flodes_sida("124", bilder=6),
+        annan_tidssida("1224", bilder=6),
+    ]
+
+    sida, note = flow_targets(svep, "035")
+
+    assert note == ""
+    assert {item.value for item in sida} == {"124"}
+
+
+def test_inget_flode_nar_sidan_inte_syntes() -> None:
+    """Hellre inget flode an ett gissat: ett felaktigt flode ser ut som lackage."""
+    svep = [varde("037", bilder=8), annan_tidssida("1223", bilder=8), spoltid(bilder=7)]
+
+    sida, note = flow_targets(svep, "037")
+
+    assert sida == []
+    assert "ingen flodessida" in note
+
+
+def test_inget_flode_nar_sidan_ar_olasbar() -> None:
+    """En grupp pa manga bilder som inte gick att lasa ar en sida - inte ett flode."""
+    svep = [
+        varde("037", bilder=8),
+        varde("000", confidence=0.0, bilder=15),
+        annan_tidssida("1223", bilder=6),
+    ]
+
+    sida, note = flow_targets(svep, "037")
+
+    assert sida == []
+    assert note
 
 
 def test_page_kind_skiljer_tidssida_fran_vardesida() -> None:
