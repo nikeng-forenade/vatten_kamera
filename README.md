@@ -62,6 +62,84 @@ run.cmd main.py probe
 `run.cmd` är en liten genväg som kör projektets egen Python. Alla kommandon nedan kan
 skrivas `run.cmd main.py ...` i stället för `python main.py ...`.
 
+## Lägga in kameran
+
+Tjänsten vet inget om kameran förrän du fyller i **adress, användare och lösenord**. Det är
+avsiktligt: de värdena får aldrig hamna i repot (se *Kamerans uppgifter ligger bara hos
+dig*). Det här behöver du:
+
+| Uppgift | Vad |
+|---|---|
+| Kamerans adress | t.ex. `192.168.1.x` — samma nät som maskinen som kör tjänsten |
+| Användare | kamerans egen användare, oftast `admin` |
+| Lösenord | kamerans lösenord |
+| Port | `80` (ISAPI). Ändra bara om kameran lyssnar på en annan port |
+| Ström | `101` = huvudströmmen, `102` = substrommen |
+
+Programmet använder **Basic auth** mot kameran. (Äldre Hikvision-firmware, som i
+DS-2CD2432F-IW, svarar `401` på Digest.)
+
+### I webbgränssnittet — enklast
+
+1. Öppna `http://<maskinens-ip>:8099/`.
+2. **Inställningar → gruppen Kameran**: fyll i *Kamerans adress*, *Användare* och *Lösenord*.
+   Lösenordet visas aldrig igen — det står bara `•••••• (sparat)` när det finns ett sparat
+   värde, och ett tomt fält lämnar det gamla värdet i fred.
+3. tryck **Spara**. Ingen omstart behövs — tjänsten läser om `.env` mellan körningarna.
+4. Tryck **Testa kameran** i kamerakortet. Svarar den `kamera svarar: DS-2CD… firmware …`
+   är kameran på plats, och kortet visar vilket läge den står i just nu.
+
+### I `.env` — vid installationen eller för hand
+
+```ini
+CAMERA_IP=<kamerans adress>
+CAMERA_USER=admin
+CAMERA_PASSWORD=<lösenord>
+CAMERA_HTTP_PORT=80
+CAMERA_CHANNEL=101
+```
+
+Filen ligger i `/opt/vattenkamera/.env` i en LXC, och i `C:\vatten_kamera\.env` i
+Windows-installationen. Samma uppgifter går att skicka med redan när containern skapas:
+
+```bash
+bash proxmox-create.sh 210 local-lvm vmbr0 192.168.1.50/24 192.168.1.1 \
+  --camera-ip <kamerans adress> --camera-user admin --camera-password '...'
+```
+
+`.env` är gitignorerad — kontrollera gärna själv att den inte är på väg till git:
+
+```powershell
+git status --short          # .env och *.json ska inte synas
+```
+
+### Kameran räcker inte — kalibreringen måste också in
+
+Adressen får kameran att *svara*, men inte att *läsas*: **kalibreringen** talar om var i
+bilden siffrorna sitter, och den är kamerans och uppställningens, inte datorns.
+
+* kopiera in din färdiga `calibration.json` till `/opt/vattenkamera/data/`, eller
+* kör i containern: `cd /opt/vattenkamera && .venv/bin/python main.py calibrate --frames 16 --save`
+
+Se [Kalibrering](#kalibrering). Provläs sedan med **Läs nu** i gränssnittet.
+
+### Om kameran inte svarar
+
+| Symptom | Vad det betyder |
+|---|---|
+| `kamerans adress saknas` | `CAMERA_IP` är tom — fyll i den i gränssnittet eller i `.env` |
+| `HTTP 401` | fel användare eller lösenord, eller Digest i stället för Basic |
+| `kunde inte na kameran: …` | fel adress, eller kameran och tjänsten i olika nät |
+| Kameran svarar men **inget värde läses** | kalibreringen saknas, eller kameran står i ett annat läge än den kalibrerades i |
+
+### Vill du se kameran i Home Assistant?
+
+Integrationen ger **`camera.vatten_kamera_senaste_bild`** — bilden värdet lästes ur, alltså
+den som betyder något. Vill du dessutom se kameran live lägger du till HA:s inbyggda
+**Generic camera** med kamerans RTSP-adress
+(`rtsp://användare:lösenord@adress:554/Streaming/Channels/1`). Den adressen hör hemma i
+HA:s konfiguration — **aldrig i det här repot**.
+
 ## Kameran – placering och ljus
 
 Det här är den enskilt viktigaste faktorn för att läsningen ska bli pålitlig.
@@ -694,6 +772,9 @@ bash lxc/install.sh --camera-password '...' --mode natt --run-at 02:05:00
 
 Koden ligger i `/opt/vattenkamera`, men data (calibration, senaste värdet, bilder, logg)
 i `/opt/vattenkamera/data` — så en uppdatering av koden rör inte installationen.
+
+Har du inte fyllt i kameran vid installationen gör du det i gränssnittet efteråt — se
+[Lägga in kameran](#lägga-in-kameran). Samma gäller kalibreringen.
 
 #### Ett kommando från Proxmox-skalet
 
