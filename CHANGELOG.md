@@ -13,6 +13,23 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.21.0 — 2026-09-27
+
+**Ett värde med en tvåa i sista siffran kunde inte publiceras alls.**
+
+* Displayens tvåa har sitt översta streck förskjutet åt höger: det börjar först vid x 0.36 i cellen,
+  medan en nolla och en trea börjar redan vid x 0.16-0.34. Mätfönstret för översta strecket låg på
+  x 0.18-0.45 och täckte då bara ~33 % av tvåans streck → 75:e percentilen hamnade på den mörka
+  delen, tvåan mättes `a=0.26` i stället för 1.0 och fick konfidens **0.34** — precis under
+  `MIN_CONFIDENCE` (0.35). Värdet `1.32` lästes alltså rätt men publicerades aldrig, och flödet
+  kunde inte heller användas (inget värde att jämföra mot).
+* Fönstret ligger nu på x 0.34-0.48 — mitt i cellen, där tvåans, fyran och treans streck finns.
+  Det får inte gå längre åt höger: där börjar ettans stapel (x 0.68 på den verkliga displayen,
+  x 0.52 i testritarens geometri) och tänds fönstret läses ettan som en sjua.
+* Mätt med `tools/probe_cell.py` mot den nya bildserien, och verifierat att `tools/check_digits.py`
+  fortfarande ger **80 av 80** kända siffror rätt, ingen under 0.5.
+* Efter fixen läses tvåan med konfidens **0.70-0.79** (var 0.34) och ettan ligger kvar på 0.83-0.87.
+
 ## 0.20.0 — 2026-09-27
 
 **Tjänsten kraschade i en evig omstartsslinga så fort ingen sida gick att läsa (minnet tog slut).**

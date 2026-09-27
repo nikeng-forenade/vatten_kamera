@@ -75,7 +75,20 @@ DIGIT_MASKS: dict[str, int] = {
 # cellkanten: strax utanfor cellen sitter displayens kolon, och dess glod nar
 # in over kanten och tander ett slakt segment.
 SEGMENT_BOXES: dict[str, tuple[float, float, float, float]] = {
-    "a": (0.18, 0.04, 0.45, 0.17),
+    # Oversta strecket (a) mats i cellens mitt, x 0.34-0.48.
+    #
+    # Displayens tvaa har sitt oversta streck forskjutet at hoger: det borjar
+    # forst vid x 0.30-0.36, medan en nolla och en trea borjar redan vid
+    # x 0.16-0.34. Med det gamla fonstret (x 0.18-0.45) tackte det bara ~33 % av
+    # tvåans streck, och 75:e percentilen hamnade da pa den morka delen: tvåan
+    # mattes a=0.26 i stallet for 1.0 och fick konfidens 0.34 - precis under
+    # MIN_CONFIDENCE (0.35). Vardet 1.32 gick darfor inte att fa ut (2026-09-27).
+    #
+    # Fonstret far inte ga langre at hoger an till x ~0.5: dar borjar ettans
+    # stapel (x 0.68 pa den verkliga displayen, x 0.52 i testritarens geometri),
+    # och tander fonstret far ettan ett tándt a - da lases ettan som en sjua.
+    # Matt 2026-09-27 med tools/probe_cell.py mot captures/nu2.
+    "a": (0.34, 0.04, 0.48, 0.17),
     "f": (0.12, 0.22, 0.32, 0.34),
     # Ovra hogra fonstret sitter en bit NERAT. Displayens sexa och femma har en
     # hake: oversta strecket böjer av nedat i det ovre hogra hornet. Med fonstret
