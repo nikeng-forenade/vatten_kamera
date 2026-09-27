@@ -9,7 +9,15 @@ Kor:  .venv/Scripts/python.exe -m pytest tests -q
 
 from __future__ import annotations
 
-from display_reader import consensus
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+import pipeline
+from config import ReaderConfig, RunConfig
+from display_reader import Reading, consensus
 from pipeline import (
     _page_value_av,
     flow_targets,
@@ -358,3 +366,63 @@ def test_enstaka_olasbar_bild_stoppar_inte_rostningen() -> None:
 
     assert [item.value for item in target] == ["091"]
     assert note == ""
+
+
+# --- Minnet under en korning ---------------------------------------------
+
+
+class FejkKamera:
+    """Kamera som svarar sa fort den tillfragas - och raknar bilderna."""
+
+    def __init__(self) -> None:
+        self.tagna = 0
+
+    def snapshot(self) -> SimpleNamespace:
+        self.tagna += 1
+        return SimpleNamespace(image=np.zeros((8, 8, 3), dtype=np.uint8), jpeg=b"bild")
+
+
+def test_korningen_haller_bara_de_sista_bilderna_i_minnet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """En korning som aldrig hittar vardet far inte samla bilder hela fonstret.
+
+    Bilderna behovs for att sla ihop lika sidor och vaga dem i rostningen, men
+    bara de sista. Utan tak vaxer minnet med hela fonstret (WINDOW_S, 30 min,
+    ~250 kB per bild) och containern - 512 MB - dor av OOM-killern mitt i
+    korningen. Uppmatt 2026-09-27: exakt sa hande det, flera ganger i rad, nar
+    kameran hade flyttat sig och ingen sida gick att lasa.
+    """
+    monkeypatch.setattr(pipeline.NightlyRunner, "__init__", lambda self, cfg, **kw: None)
+    instans = pipeline.NightlyRunner(None)
+    instans.cfg = SimpleNamespace(
+        run=RunConfig(window_s=1.0, interval_s=0.0, save_frames=False, read_flow=False),
+        reader=ReaderConfig(),
+    )
+    instans.calibration = SimpleNamespace(roi=(0, 0, 8, 8))
+    instans.similarity_threshold = 8.0
+    instans.camera = FejkKamera()
+
+    # En bild som aldrig gar att lasa: korningen letar vidare hela tiden.
+    olasbar = Reading(value="", confidence=0.0, digits=[], timestamp=0.0, boxes=[], ok=False)
+    monkeypatch.setattr(pipeline, "crop_roi", lambda *a, **kw: np.zeros((8, 8), dtype=np.uint8))
+    monkeypatch.setattr(pipeline, "image_from_crop", lambda *a, **kw: np.zeros((8, 8, 3), dtype=np.uint8))
+    monkeypatch.setattr(pipeline, "read_image", lambda *a, **kw: olasbar)
+
+    sedda: dict[str, int] = {}
+
+    def grupper(crops: object, threshold: float) -> list[list[int]]:
+        sedda["antal"] = len(crops)  # type: ignore[arg-type]
+        return []
+
+    monkeypatch.setattr(pipeline, "group_similar", grupper)
+
+    pipeline.NightlyRunner._capture_and_read(
+        instans, duration_s=0.5, frames_dir=tmp_path, stop_when_ready=True
+    )
+
+    assert instans.camera.tagna > pipeline.MAX_BUFFERED_FRAMES, "for fa bilder i testet"
+    assert sedda["antal"] == pipeline.MAX_BUFFERED_FRAMES, (
+        "bufferten vaxer med fonstret - minnet tar slut i containern"
+    )
+    assert pipeline.MAX_BUFFERED_FRAMES >= 100, "for kort buffert for en hel sida"

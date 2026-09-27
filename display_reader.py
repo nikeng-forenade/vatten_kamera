@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from dataclasses import replace
 from pathlib import Path
@@ -1125,7 +1126,7 @@ def crop_roi(image: np.ndarray, roi: Box, channel: str = "auto") -> np.ndarray:
     return pick_channel(image[y1:y2, x1:x2], channel)[0]
 
 
-def group_similar(crops: list[np.ndarray], threshold: float = 8.0) -> list[list[int]]:
+def group_similar(crops: Sequence[np.ndarray], threshold: float = 8.0) -> list[list[int]]:
     """Delar in bilderna i grupper dar gruppens bilder visar samma sak.
 
     Bilderna jamfors med den senaste gruppens medelvarde. Nar displayen byter
@@ -1163,7 +1164,7 @@ def group_similar(crops: list[np.ndarray], threshold: float = 8.0) -> list[list[
     return groups
 
 
-def typical_crops(crops: list[np.ndarray], indices: list[int]) -> np.ndarray:
+def typical_crops(crops: Sequence[np.ndarray], indices: list[int]) -> np.ndarray:
     """Den typiska bilden av de valda: medianen pixel for pixel.
 
     Median i stallet for medelvarde. Displayen flimrar - nagra bilder tas mitt i

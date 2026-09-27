@@ -13,7 +13,7 @@ import logging
 import os
 import re
 import time
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
@@ -400,8 +400,9 @@ class NightlyRunner:
         cfg = self.cfg.run
         reader_cfg = self.cfg.reader
 
-        crops: list[np.ndarray] = []
-        jpegs: list[bytes | None] = []
+        # Bara de sista bilderna halls i minnet - se MAX_BUFFERED_FRAMES.
+        crops: deque[np.ndarray] = deque(maxlen=MAX_BUFFERED_FRAMES)
+        jpegs: deque[bytes | None] = deque(maxlen=MAX_BUFFERED_FRAMES)
         deadline = time.time() + duration_s
         index = 0
         ready = ReadyTracker()
@@ -991,6 +992,19 @@ def page_kind(reading: Reading) -> str:
         return "varde"
     return "okant"
 
+
+# Hur manga bilder korningen haller i minnet samtidigt.
+#
+# Bilderna behovs for att sla ihop lika sidor och vaga dem i rostningen, men
+# bara de sista: vardet letas upp strax fore korningens slut och en sida star i
+# 10-12 s. Utan tak samlar en korning som aldrig hittar vardet bilder under hela
+# fonstret (WINDOW_S, 30 min) - utsnitt + JPEG ar ~250 kB per bild, alltsa
+# ~300 MB for 1 200 bilder - och da tar minnet slut i LXC:n (512 MB) och
+# tjansten dodas av OOM-killern mitt i korningen. Uppmatt 2026-09-27: precis sa
+# hande det, flera ganger i rad, nar kameran hade flyttat sig nagra pixlar och
+# ingen sida gick att lasa. 200 bilder = ~5 minuter = ~50 MB, och displayens
+# varv ar ~1 minut, sa spolttidssidan (02:00) finns kvar i bufferten anda.
+MAX_BUFFERED_FRAMES = 200
 
 # Hur manga bilder en grupp maste vila pa for att raknas som en SIDA pa displayen
 # och inte som en toning mellan tva sidor. Nar vardet halls kvar star displayen

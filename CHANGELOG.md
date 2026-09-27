@@ -13,6 +13,25 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.20.0 — 2026-09-27
+
+**Tjänsten kraschade i en evig omstartsslinga så fort ingen sida gick att läsa (minnet tog slut).**
+
+* Kameran hade flyttat sig några pixlar — siffrorna satt 20 px längre åt höger och rörde vid
+  bildens överkant. Mätfönstren i `calibration.json` pekade då fel, och **ingen sida gick att
+  läsa**. Det syns inte som ett fel: körningen letar vidare under hela fönstret.
+* Under tiden sparades **varje bild i minnet** (utsnitt + JPEG, ~250 kB per bild). Efter 30
+  minuter (`WINDOW_S`) hade ~300 MB samlats i en LXC med 512 MB → **OOM-killern dödade tjänsten
+  mitt i körningen**, systemd startade om den var ~31:a minut, och samma sak hände igen. I
+  loggen syntes bara `startar korning` — ingen `klar`-rad, inget värde, ingen förklaring.
+* Körningen håller nu bara de **sista 200 bilderna** i minnet (`MAX_BUFFERED_FRAMES`). Det
+  räcker: en sida står i 10–12 s, displayens varv är ~1 minut och värdet letas upp mot slutet
+  av körningen. Minnet är begränsat till ~50 MB hur länge körningen än letar.
+* Nytt test: en körning som aldrig hittar värdet får inte samla fler bilder än taket.
+* `calibration.json` mättes om mot kamerans nya läge (cellrutorna flyttades +20 px i x och
+  några px i y). Filen är platsspecifik och ligger inte i repot.
+* Verifierat live efter fixen: värdet **1.34** (konfidens 0.91) och flödet läses som förut.
+
 ## 0.19.0 — 2026-09-26
 
 **Kameran i Home Assistant visar bilden igen.**
