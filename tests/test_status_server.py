@@ -498,6 +498,20 @@ def test_kalibreringen_vagrar_orimliga_rutor(server: StatusServer, kalibreringen
     assert "4 rutor" in data["text"]
 
 
+def test_utsnittet_vaxer_inte_nar_rutorna_ligger_inuti(
+    server: StatusServer, kalibreringen: Path
+) -> None:
+    """Annars vaxer ROI:n en bit varje gang man sparar."""
+    fore = json.loads(kalibreringen.read_text(encoding="utf-8"))["roi"]
+    rutor = [[10, 5, 70, 105], [80, 5, 140, 105], [150, 5, 210, 105], [200, 5, 260, 105]]
+
+    status, data = hamta(server, "/api/calibration", {"cell_boxes": rutor})
+
+    assert status == 200
+    assert data["roi"] == fore, "utsnittet ska inte vaxa nar rutorna ryms"
+    assert "vidgat" not in data["text"]
+
+
 def test_utsnittet_vidgas_nar_en_ruta_hamnar_utanfor(
     server: StatusServer, kalibreringen: Path
 ) -> None:

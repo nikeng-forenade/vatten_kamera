@@ -13,6 +13,17 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.26.0 — 2026-09-27
+
+**Utsnittet växer bara när det behövs — och notisen säger vad som gjordes.**
+
+* `CALIBRATION_ROI` behandlades som "minst 48 px luft runt rutorna", så den växte några pixlar varje
+  gång man tryckte Spara (första gången: 985 → 981). Nu vidgas den **bara** när en ruta hamnar
+  utanför utsnittet — annars står den still. Den krymps fortfarande aldrig.
+* Notisen i `calibration.json` skiljer på "mätt fram i gränssnittet" och "flyttat i gränssnittet",
+  så filen berättar vad som gjordes.
+* Nytt test: att utsnittet står still när rutorna ryms.
+
 ## 0.25.0 — 2026-09-27
 
 **Kalibreringspanelen skiljer på värde och tidssida — och säger vad som är fel.**

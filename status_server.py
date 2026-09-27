@@ -696,7 +696,7 @@ def _giltiga_rutor(ra: Any, antal: int) -> list[tuple[int, int, int, int]]:
     return rutor
 
 
-def spara_kalibrering(payload: dict[str, Any]) -> dict[str, Any]:
+def spara_kalibrering(payload: dict[str, Any], *, notis: str = "") -> dict[str, Any]:
     """Sparar rutnatet och visar vad det laser i samma bild som man drog i."""
     from config import load_config
     from display_reader import Calibration
@@ -708,20 +708,32 @@ def spara_kalibrering(payload: dict[str, Any]) -> dict[str, Any]:
     rutor = _giltiga_rutor(payload.get("cell_boxes"), antal)
 
     # ROI:n maste rymma rutorna - annars klipps siffran bort innan rutorna ens
-    # far se den. Den vaxer bara, den krymps aldrig.
+    # far se den. Den vidgas bara nar nagon ruta ligger utanfor, annars skulle
+    # den vaxa en bit varje gang man sparar. Den krymps aldrig.
     gammal = tuple(cal.roi) if cal.valid else (0, 0, 0, 0)
-    ny_roi = (
-        max(0, min(gammal[0], min(box[0] for box in rutor) - ROI_MARGINAL)),
-        max(0, min(gammal[1], min(box[1] for box in rutor) - ROI_MARGINAL)),
-        max(gammal[2], max(box[2] for box in rutor) + ROI_MARGINAL),
-        max(gammal[3], max(box[3] for box in rutor) + ROI_MARGINAL),
+    utanfor = (
+        not cal.valid
+        or min(box[0] for box in rutor) < gammal[0]
+        or min(box[1] for box in rutor) < gammal[1]
+        or max(box[2] for box in rutor) > gammal[2]
+        or max(box[3] for box in rutor) > gammal[3]
     )
+    if utanfor:
+        ny_roi = (
+            max(0, min(gammal[0], min(box[0] for box in rutor) - ROI_MARGINAL)),
+            max(0, min(gammal[1], min(box[1] for box in rutor) - ROI_MARGINAL)),
+            max(gammal[2], max(box[2] for box in rutor) + ROI_MARGINAL),
+            max(gammal[3], max(box[3] for box in rutor) + ROI_MARGINAL),
+        )
+    else:
+        ny_roi = gammal
 
     ny = Calibration(
         roi=ny_roi,
         digit_count=antal,
         cell_boxes=list(rutor),
-        notes=f"rutnat flyttat i granssnittet {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        notes=notis
+        or f"rutnat flyttat i granssnittet {datetime.now().strftime('%Y-%m-%d %H:%M')}",
     )
     ny.save(_kalibreringsfil())
 
@@ -769,7 +781,10 @@ def mat_kalibrering() -> dict[str, Any]:
         raise ValueError(f"kunde inte mata rutnatet: {exc}") from None
 
     _spara_bilden(frames)
-    svar = spara_kalibrering({"cell_boxes": [list(box) for box in rutor]})
+    svar = spara_kalibrering(
+        {"cell_boxes": [list(box) for box in rutor]},
+        notis=f"rutnat matt fram i granssnittet {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+    )
     svar["rapport"] = list(rapport)
     svar["text"] = "rutnatet matt fram och sparat"
     return svar
