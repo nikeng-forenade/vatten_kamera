@@ -579,18 +579,45 @@ def las_med_rutorna(frames: list[Any], cal: Any) -> dict[str, Any]:
     if vald.numeric is not None:
         display = f"{vald.numeric:.{vald.decimals}f}"
 
-    if vald.ok and vald.confidence > 0:
-        text = f"rutorna laser {display} (konfidens {vald.confidence:.2f})"
-    elif not vald.digits:
-        text = "ingen siffra hittades - sitter rutorna innanfor displayen?"
+    # En vardesida har forsta positionen slackt; pa en tidssida (klockan, 02:00)
+    # lyser alla fyra. Bada sager lika mycket om rutorna sitter ratt, men bara
+    # vardesidan ger ett varde - och det ska sta, inte "rutorna pekar fel".
+    vardesida = bool(vald.digits) and vald.digits[0].blank
+    if vardesida:
+        sida = "varde"
+    elif vald.digits and len(tande) == len(vald.digits):
+        sida = "tid"
     else:
-        text = "rutorna pekar fel - ingen siffra gick att lasa"
+        sida = "okant"
+
+    if not tande:
+        text = "ingen siffra hittades - sitter rutorna innanfor displayen?"
+        ok = False
+    elif vardesida and vald.confidence > 0:
+        text = f"rutorna laser {display} (konfidens {vald.confidence:.2f})"
+        ok = True
+    elif sida == "tid" and svagast["konfidens"] >= 0.5:
+        # Alla fyra siffrorna lases sakert, men sidan ar en tidssida - det finns
+        # inget varde att visa forran en vardesida kommer.
+        text = (
+            f"siffrorna lases sakert - displayen visar en tidssida ({display})."
+            " Ta 'Ny bild' for att se en vardesida."
+        )
+        ok = True
+    else:
+        text = (
+            f"position {svagast['position']} laser {svagast['tecken']!r} med konfidens"
+            f" {svagast['konfidens']:.2f} - flytta den rutan"
+        )
+        ok = svagast["konfidens"] >= 0.5
 
     return {
-        "ok": bool(vald.ok and vald.confidence > 0),
+        "ok": ok,
+        "sida": sida,
         "varde": vald.value or "",
         "display": display,
         "konfidens": round(vald.confidence, 2),
+        "minsta_konfidens": svagast["konfidens"] if svagast else 0.0,
         "siffror": siffror,
         "svagast": svagast,
         "text": text,

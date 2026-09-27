@@ -560,6 +560,23 @@ def test_kalibreringen_ber_lasningen_slappa_kameran(
     status_server.set_state(running=False)
 
 
+def test_tidssida_lases_sakert_men_ar_inget_varde(
+    server: StatusServer, monkeypatch: pytest.MonkeyPatch, kalibreringen: Path
+) -> None:
+    """Klockan och 02:00 har alla fyra siffrorna tända - de säger att rutorna
+    sitter rätt, men de är inget värde (första positionen ska vara släckt)."""
+    monkeypatch.setattr(status_server, "_ta_bilder", lambda *a, **kw: syntetiska_bilder("1336")[0])
+
+    status, data = hamta(server, "/api/calibration/ny", {})
+
+    assert status == 200
+    lasning = data["lasning"]
+    assert lasning["sida"] == "tid"
+    assert lasning["ok"] is True, "siffrorna lases sakert"
+    assert lasning["minsta_konfidens"] >= 0.5
+    assert "tidssida" in lasning["text"]
+
+
 def test_kalibreringspanelen_finns_i_sidan() -> None:
     """Panelen ska finnas i sidan - annars gar rutorna bara att flytta i koden."""
     sida = (Path(status_server.__file__).resolve().parent / "web" / "index.html").read_text(

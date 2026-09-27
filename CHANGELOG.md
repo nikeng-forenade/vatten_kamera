@@ -13,6 +13,21 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.25.0 — 2026-09-27
+
+**Kalibreringspanelen skiljer på värde och tidssida — och säger vad som är fel.**
+
+* Displayen visar fyra slags sidor: klockan, spolttiden `02:00`, värdet och flödet. På en tidssida
+  lyser **alla fyra** positionerna, och då är läsningens konfidens 0 (på en värdesida ska första
+  positionen vara släckt). Panelen skrev därför "rutorna pekar fel" trots att siffrorna lästes med
+  konfidens 0.90-0.98.
+* Svaret skiljer nu på `sida: värde | tid | okänt`. En tidssida visas **dämpad** med texten
+  "siffrorna läses säkert - displayen visar en tidssida (13.36). Ta 'Ny bild' för att se en
+  värdesida." — rutorna sitter ju rätt, det finns bara inget värde på den sidan.
+* Är en siffra svag står det **vilken** och hur svag: "position 3 läser '3' med konfidens 0.13 —
+  flytta den rutan" i stället för ett allmänt felmeddelande.
+* Nytt test för just tidssidan.
+
 ## 0.24.0 — 2026-09-27
 
 **Kalibreringen tar kameran för sig själv — och en läsning som letar förgäves släpper.**

@@ -914,7 +914,8 @@ function kalVisa(data) {
   $('kalInfo').textContent = data.version ? `v${data.version}` : '';
   const varde = $('kalVarde');
   varde.textContent = lasning.display || '–';
-  varde.className = 'kal-varde' + (lasning.ok ? '' : ' stale');
+  // En tidssida (klockan, 02:00) ar inte vardet - visa den dämpad.
+  varde.className = 'kal-varde' + (lasning.ok && lasning.sida === 'varde' ? '' : ' stale');
   $('kalSiffror').innerHTML = (lasning.siffror || []).map((siffra) =>
     `<div>position ${siffra.position}: <b>${siffra.tecken === ' ' ? 'släckt' : siffra.tecken}</b>` +
     ` <span class="dim">konfidens ${siffra.konfidens.toFixed(2)}</span></div>`).join('');
