@@ -43,9 +43,14 @@
   .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
   #msg { font-size: .85rem; color: var(--dim); }
   #msg.ok { color: var(--green); } #msg.fel { color: var(--red); }
-  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-                  padding: 18px; margin-bottom: 16px; }
-  section.panel h2 { font-size: 1rem; margin-bottom: 14px; }
+  /* Panelerna går att stänga: allt utom värdet är stängt när man kommer in. */
+  details.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+                  padding: 14px 18px; margin-bottom: 16px; }
+  summary.panel-titel { font-size: 1rem; font-weight: 600; cursor: pointer;
+                        list-style-position: inside; }
+  summary.panel-titel:hover { color: #fff; }
+  summary.panel-titel .dim { font-weight: 400; font-size: .82rem; margin-left: 6px; }
+  .panel-inne { margin-top: 14px; }
   .group { margin-bottom: 18px; }
   .group h4 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em;
               color: var(--dim); margin-bottom: 10px; }
@@ -134,8 +139,9 @@
     <img id="bild" hidden alt="Bilden avläsaren valde">
   </div>
 
-  <section class="panel">
-    <h2>Värdets utveckling <span class="dim" id="grafInfo"></span></h2>
+  <details class="panel" id="panelGraf">
+    <summary class="panel-titel">Värdets utveckling <span class="dim" id="grafInfo"></span></summary>
+    <div class="panel-inne">
     <div class="graf-rad">
       <div class="graf-vy">
         <svg id="graf" viewBox="0 0 800 220" preserveAspectRatio="none" role="img"
@@ -155,10 +161,12 @@
         <figcaption id="grafText">Ingen punkt vald.</figcaption>
       </figure>
     </div>
-  </section>
+    </div>
+  </details>
 
-  <section class="panel">
-    <h2>🎯 Rutan som ser siffrorna <span class="dim" id="kalInfo"></span></h2>
+  <details class="panel" id="panelKal">
+    <summary class="panel-titel">🎯 Rutan som ser siffrorna <span class="dim" id="kalInfo"></span></summary>
+    <div class="panel-inne">
     <p class="hint" style="margin:0 0 12px">
       Displayen visar en siffra per ruta. <b>Dra i en ruta</b> tills den sitter över siffran
       (markera den och använd piltangenterna för finjustering, skift + piltangent tar tio steg),
@@ -185,8 +193,12 @@
         <div class="hint" id="kalText">…</div>
       </div>
     </div>
-  </section>
+    </div>
+  </details>
 
+  <details class="panel" id="panelStatus">
+    <summary class="panel-titel">Status och tester <span class="dim">kameran, Home Assistant, MQTT, tjänsten</span></summary>
+    <div class="panel-inne">
   <div class="grid">
     <div class="card">
       <h3>📷 Kameran</h3>
@@ -220,6 +232,8 @@
       <p class="hint" id="modeText" style="margin-top:8px"></p>
     </div>
   </div>
+    </div>
+  </details>
 
   <div class="actions">
     <button class="primary" id="run">Läs nu</button>
@@ -235,14 +249,13 @@
     <b>Flöde hela tiden</b> — <span id="lackageText"></span>
   </p>
   <p class="hint warn" id="kalibreringVarning" hidden>
-    <b>Kalibreringen saknas</b> — tjänsten kan inte läsa displayen förrän den finns. Kör
-    <code>cd /opt/vattenkamera &amp;&amp; .venv/bin/python main.py calibrate --frames 16 --save</code>
-    på maskinen som kör tjänsten, eller lägg in <code>calibration.json</code> i
-    <code>data/</code> — samma fil som fungerar på den andra maskinen. Sedan läser den vid
-    nästa körning, ingen omstart behövs.
+    <b>Kalibreringen saknas</b> — tjänsten kan inte läsa displayen förrän den finns. Öppna
+    <b>Rutan som ser siffrorna</b> och tryck <b>Mät automatiskt</b>, så mäts rutnätet fram och
+    sparas — nästa läsning använder det, ingen omstart behövs.
   </p>
-  <section class="panel">
-    <h2>Inställningar</h2>
+  <details class="panel" id="panelInstallningar">
+    <summary class="panel-titel">Inställningar</summary>
+    <div class="panel-inne">
     <form id="form"></form>
     <div class="actions" style="margin:16px 0 0">
       <button class="primary" id="save">Spara</button>
@@ -250,12 +263,15 @@
         Ändringarna gäller från nästa läsning; bara porten för gränssnittet kräver omstart.</span>
     </div>
     <div id="saveMsg" class="hint"></div>
-  </section>
+    </div>
+  </details>
 
-  <section class="panel">
-    <h2>Logg</h2>
+  <details class="panel" id="panelLogg">
+    <summary class="panel-titel">Logg</summary>
+    <div class="panel-inne">
     <pre id="log">hämtar…</pre>
-  </section>
+    </div>
+  </details>
 
   <p class="hint" id="integrationHint"></p>
 </main>
@@ -979,6 +995,16 @@ async function kalMat() {
     else if (id === 'kalMat') kalMat();
     else if (id === 'kalSpara') kalSpara();
     else kalLoad(false);
+  });
+});
+
+// Panelerna är stängda när man kommer in. En stängd panel har ingen bredd, så
+// kalibreringsbilden och grafen ritas om när panelen öppnas igen.
+document.querySelectorAll('details.panel').forEach((panel) => {
+  panel.addEventListener('toggle', () => {
+    if (!panel.open) return;
+    if (panel.querySelector('#kalVy')) kalRita();
+    if (panel.querySelector('#graf')) refreshGraph();
   });
 });
 

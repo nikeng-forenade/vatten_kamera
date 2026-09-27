@@ -13,6 +13,18 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.23.0 — 2026-09-27
+
+**Alla paneler går att stänga — och är stängda när man kommer in.**
+
+* Värdets utveckling, Rutan som ser siffrorna, Status och tester, Inställningar och Logg ligger nu i
+  hopfällbara paneler (webbläsarens egna `details`/`summary`, ingen extern kod). Bara värdet med
+  bevisbilden är öppet när sidan laddas — öppnar man en panel är den öppen tills man laddar om.
+* Panelen **Rutan som ser siffrorna** ritar om bilden när den öppnas (en stängd panel har ingen
+  bredd, så rutorna skulle annars hamna snett), liksom grafen.
+* Varningen för saknad kalibrering pekar nu på panelen och **Mät automatiskt** i stället för på
+  kommandoraden.
+
 ## 0.22.0 — 2026-09-27
 
 **Rutan som ser siffrorna kan flyttas i gränssnittet.**
