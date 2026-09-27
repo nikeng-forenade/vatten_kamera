@@ -92,6 +92,24 @@
                  margin-left: auto; cursor: pointer; user-select: none; }
   .live-toggle input { accent-color: var(--green); }
   .live-toggle input:disabled + span { opacity: .5; }
+
+  /* Kalibreringen: bilden av displayen med en ruta per siffra, dragbara. */
+  .kal-rad { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .kal-vy { position: relative; flex: 1 1 520px; min-width: 260px; line-height: 0;
+            border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+            background: #0b0d12; touch-action: none; }
+  .kal-vy canvas { display: block; width: 100%; height: auto; }
+  .kal-ruta { position: absolute; border: 1px solid var(--blue); border-radius: 2px;
+              background: rgba(59,130,246,.10); cursor: grab; }
+  .kal-ruta.svag { border-color: var(--amber); background: rgba(245,158,11,.12); }
+  .kal-ruta.fel { border-color: var(--red); background: rgba(239,68,68,.14); }
+  .kal-ruta:focus { outline: 2px solid #fff; outline-offset: 1px; }
+  .kal-roi { position: absolute; border: 1px dashed #6b7280; pointer-events: none; }
+  .kal-sida { flex: 0 1 300px; min-width: 240px; }
+  .kal-varde { font-size: 2.1rem; font-weight: 700; letter-spacing: -1px; line-height: 1.1; }
+  .kal-varde.stale { color: var(--dim); }
+  .kal-siffror { font-size: .82rem; color: var(--dim); margin-top: 6px; line-height: 1.7; }
+  .kal-siffror b { color: var(--text); font-weight: 500; }
   code { background: var(--panel2); padding: 2px 6px; border-radius: 5px; font-size: .8rem; }
 </style>
 </head>
@@ -136,6 +154,36 @@
         <img id="grafBild" hidden alt="Bilden bakom den valda punkten">
         <figcaption id="grafText">Ingen punkt vald.</figcaption>
       </figure>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>🎯 Rutan som ser siffrorna <span class="dim" id="kalInfo"></span></h2>
+    <p class="hint" style="margin:0 0 12px">
+      Displayen visar en siffra per ruta. <b>Dra i en ruta</b> tills den sitter över siffran
+      (markera den och använd piltangenterna för finjustering, skift + piltangent tar tio steg),
+      och tryck <b>Spara &amp; läs</b>. Grönt = säker läsning, gult = osäker, rött = går inte att
+      läsa. Rubbas kameran (t.ex. när saltet fylls på) är det här man rättar till den.
+    </p>
+    <div class="kal-rad">
+      <div class="kal-vy" id="kalVy">
+        <canvas id="kalDuk" width="800" height="300"></canvas>
+        <div id="kalRutor"></div>
+      </div>
+      <div class="kal-sida">
+        <div class="kal-varde stale" id="kalVarde">–</div>
+        <div class="kal-siffror" id="kalSiffror">hämtar…</div>
+        <div class="kamera-knappar">
+          <button id="kalNy">Ny bild</button>
+          <button id="kalMat">Mät automatiskt</button>
+          <button class="primary" id="kalSpara">Spara &amp; läs</button>
+          <button id="kalAngra">Ångra</button>
+        </div>
+        <label class="live-toggle" style="margin:10px 0 0">
+          <input type="checkbox" id="kalAlla" checked> Flytta alla fyra samtidigt
+        </label>
+        <div class="hint" id="kalText">…</div>
+      </div>
     </div>
   </section>
 
@@ -747,6 +795,193 @@ $('grafPeriod').addEventListener('change', () => {
   refreshGraph();
 });
 
+// --- Kalibreringen: rutorna som ser siffrorna -----------------------------
+//
+// Rutorna ligger i calibration.json som fyra rutor i bildens koordinater. Har
+// drar man dem dit siffrorna sitter och ser direkt vad de laser - sa att en
+// kamera som rubbats gar att ratta till utan att mata pa en annan maskin.
+const kal = { vy: [0, 0, 1, 1], storlek: [1, 1], roi: [], rutor: [], vald: -1, drag: null, bild: null, lasning: null };
+
+function kalSkala() {
+  const bredd = $('kalVy').clientWidth || 600;
+  return Math.max(0.2, bredd / Math.max(1, kal.vy[2] - kal.vy[0]));
+}
+
+function kalKlass(index) {
+  const siffror = (kal.lasning && kal.lasning.siffror) || [];
+  const siffra = siffror[index];
+  if (!siffra || siffra.tecken === ' ') return '';
+  if (siffra.konfidens >= 0.6) return '';
+  return siffra.konfidens >= 0.35 ? ' svag' : ' fel';
+}
+
+function kalRita() {
+  const vy = kal.vy;
+  const duk = $('kalDuk');
+  const lager = $('kalRutor');
+  if (!kal.bild || vy[2] <= vy[0]) return;
+  const skala = kalSkala();
+  duk.width = Math.round((vy[2] - vy[0]) * skala);
+  duk.height = Math.round((vy[3] - vy[1]) * skala);
+  const ctx = duk.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(kal.bild, vy[0], vy[1], vy[2] - vy[0], vy[3] - vy[1], 0, 0, duk.width, duk.height);
+
+  lager.innerHTML = '';
+  const roi = kal.roi || [];
+  if (roi.length === 4) {
+    const ram = document.createElement('div');
+    ram.className = 'kal-roi';
+    ram.style.left = ((roi[0] - vy[0]) * skala) + 'px';
+    ram.style.top = ((roi[1] - vy[1]) * skala) + 'px';
+    ram.style.width = ((roi[2] - roi[0]) * skala) + 'px';
+    ram.style.height = ((roi[3] - roi[1]) * skala) + 'px';
+    ram.title = 'Utsnittet som tjänsten läser (CALIBRATION_ROI)';
+    lager.appendChild(ram);
+  }
+
+  kal.rutor.forEach((ruta, index) => {
+    const el = document.createElement('div');
+    el.className = 'kal-ruta' + kalKlass(index);
+    el.tabIndex = 0;
+    el.title = `Siffra ${index + 1} — dra, eller använd piltangenterna`;
+    el.style.left = ((ruta[0] - vy[0]) * skala) + 'px';
+    el.style.top = ((ruta[1] - vy[1]) * skala) + 'px';
+    el.style.width = ((ruta[2] - ruta[0]) * skala) + 'px';
+    el.style.height = ((ruta[3] - ruta[1]) * skala) + 'px';
+    el.addEventListener('pointerdown', (event) => kalStartDrag(event, index, el));
+    el.addEventListener('keydown', (event) => kalTangent(event, index));
+    el.addEventListener('focus', () => { kal.vald = index; });
+    lager.appendChild(el);
+  });
+}
+
+function kalFlytta(ruta, dx, dy) {
+  const [x1, y1, x2, y2] = ruta;
+  const bredd = kal.storlek[0], hojd = kal.storlek[1];
+  const nx = Math.min(Math.max(0, x1 + dx), Math.max(0, bredd - (x2 - x1)));
+  const ny = Math.min(Math.max(0, y1 + dy), Math.max(0, hojd - (y2 - y1)));
+  return [nx, ny, nx + (x2 - x1), ny + (y2 - y1)];
+}
+
+function kalStartDrag(event, index, el) {
+  event.preventDefault();
+  kal.vald = index;
+  try { el.setPointerCapture(event.pointerId); } catch (e) { /* mus utan capture */ }
+  kal.drag = { index: index, x: event.clientX, y: event.clientY, start: kal.rutor.map((r) => [...r]) };
+}
+
+function kalTangent(event, index) {
+  const steg = event.shiftKey ? 10 : 1;
+  const stegvis = { ArrowLeft: [-steg, 0], ArrowRight: [steg, 0], ArrowUp: [0, -steg], ArrowDown: [0, steg] }[event.key];
+  if (!stegvis) return;
+  event.preventDefault();
+  kal.rutor = kal.rutor.map((ruta, i) => (i === index ? kalFlytta(ruta, stegvis[0], stegvis[1]) : ruta));
+  kalRita();
+}
+
+window.addEventListener('pointermove', (event) => {
+  const drag = kal.drag;
+  if (!drag) return;
+  const skala = kalSkala();
+  const alla = $('kalAlla').checked;
+  const dx = Math.round((event.clientX - drag.x) / skala);
+  const dy = Math.round((event.clientY - drag.y) / skala);
+  kal.rutor = drag.start.map((ruta, i) => (alla || i === drag.index ? kalFlytta(ruta, dx, dy) : ruta));
+  kalRita();
+});
+window.addEventListener('pointerup', () => { kal.drag = null; });
+window.addEventListener('resize', () => { if (kal.rutor.length) kalRita(); });
+
+function kalVisa(data) {
+  const lasning = data.lasning || {};
+  $('kalInfo').textContent = data.version ? `v${data.version}` : '';
+  const varde = $('kalVarde');
+  varde.textContent = lasning.display || '–';
+  varde.className = 'kal-varde' + (lasning.ok ? '' : ' stale');
+  $('kalSiffror').innerHTML = (lasning.siffror || []).map((siffra) =>
+    `<div>position ${siffra.position}: <b>${siffra.tecken === ' ' ? 'släckt' : siffra.tecken}</b>` +
+    ` <span class="dim">konfidens ${siffra.konfidens.toFixed(2)}</span></div>`).join('');
+  const delar = [data.text, lasning.text];
+  if (data.kalibrering_saknas) delar.push('Ingen kalibrering finns än — tryck "Mät automatiskt".');
+  $('kalText').textContent = delar.filter(Boolean).join(' · ');
+}
+
+function kalLaddaBild(url) {
+  return new Promise((resolve) => {
+    const bild = new Image();
+    bild.onload = () => { kal.bild = bild; resolve(); };
+    bild.onerror = () => { kal.bild = null; resolve(); };
+    bild.src = url;
+  });
+}
+
+async function kalLoad(ny) {
+  const knapp = $('kalNy');
+  knapp.disabled = true;
+  $('kalText').textContent = ny ? 'tar nya bilder från kameran…' : 'hämtar…';
+  let data = { ok: false };
+  try {
+    data = await api(ny ? '/api/calibration/ny' : '/api/calibration', ny ? {} : null);
+  } finally {
+    knapp.disabled = false;
+  }
+  if (!data.ok) {
+    $('kalText').textContent = data.text || 'kunde inte hämta kalibreringen';
+    return;
+  }
+  kal.vy = data.vy;
+  kal.storlek = data.storlek;
+  kal.roi = data.roi || [];
+  kal.rutor = (data.cell_boxes || []).map((box) => [...box]);
+  kal.vald = kal.rutor.length ? 0 : -1;
+  if (data.bild_url) await kalLaddaBild(data.bild_url);
+  kal.lasning = data.lasning || null;
+  kalVisa(data);
+  kalRita();
+}
+
+async function kalSpara() {
+  if (!kal.rutor.length) return;
+  const knapp = $('kalSpara');
+  knapp.disabled = true;
+  $('kalText').textContent = 'sparar och läser…';
+  const data = await api('/api/calibration', { cell_boxes: kal.rutor });
+  knapp.disabled = false;
+  if (!data.ok) {
+    $('kalText').textContent = data.text || 'kunde inte spara';
+    return;
+  }
+  kal.roi = data.roi || kal.roi;
+  kal.rutor = (data.cell_boxes || []).map((box) => [...box]);
+  kal.lasning = data.lasning || null;
+  kalVisa(data);
+  kalRita();
+}
+
+async function kalMat() {
+  const knapp = $('kalMat');
+  knapp.disabled = true;
+  $('kalText').textContent = 'mäter rutnätet i färska bilder — det tar en halv minut…';
+  const data = await api('/api/calibration/mat', {});
+  knapp.disabled = false;
+  if (!data.ok) {
+    $('kalText').textContent = data.text || 'kunde inte mäta rutnätet';
+    return;
+  }
+  await kalLoad(false);
+  $('kalText').textContent = 'rutnätet mättes fram och sparades';
+}
+
+['kalNy', 'kalMat', 'kalSpara', 'kalAngra'].forEach((id) => {
+  $(id).addEventListener('click', () => {
+    if (id === 'kalNy') kalLoad(true);
+    else if (id === 'kalMat') kalMat();
+    else if (id === 'kalSpara') kalSpara();
+    else kalLoad(false);
+  });
+});
+
 (async function start() {
   live = localStorage.getItem(LIVE_KEY) !== '0';
   $('liveToggle').checked = live;
@@ -755,6 +990,7 @@ $('grafPeriod').addEventListener('change', () => {
   await refreshLog();
   await refreshGraph();
   refreshCamera();
+  kalLoad(false);
   setInterval(() => { if (live) refreshStatus(); }, 5000);
   setInterval(() => { if (live) refreshLog(); }, 20000);
   setInterval(() => { if (live) refreshGraph(); }, 15000);

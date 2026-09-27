@@ -404,6 +404,327 @@ def camera_action(action: str, values: dict[str, str] | None = None) -> dict[str
         return {"ok": False, "text": str(exc)}
 
 
+# ---------------------------------------------------------------------------
+# Kalibreringen: rutnatet som ser siffrorna
+#
+# Sifferlasningen hanger pa fyra rutor (cell_boxes i calibration.json) som sager
+# var pa bilden varje siffra sitter. Kameran kan rubbas - den sitter i en kallare
+# och far en knuff nar saltet fylls pa - och da pekar rutorna fel och inget varde
+# publiceras. De har vaggarna later granssnittet visa bilden med rutorna, flytta
+# dem med musen och se direkt vad de laser, i stallet for att mata pa en annan
+# maskin och kopiera over en fil.
+# ---------------------------------------------------------------------------
+
+# Hur manga bilder "Ny bild" och "Mat automatiskt" tar. Fler bilder ger en
+# stadigare tidsstack (alla fyra siffrorna syns da pa en gang) men tar langre
+# tid: 8 bilder med 1.2 s mellanrum ar ett tiotal sekunder.
+KALIBRERINGS_BILDER = 8
+KALIBRERINGS_INTERVALL_S = 1.2
+
+# En ruta mindre an sa kan inte innehalla en siffra.
+MIN_CELL_PX = 20
+
+# Hur mycket luft rutnatet far ha runt siffrorna nar ROI:n behover vidgas.
+ROI_MARGINAL = 48
+
+# Luften runt ROI:n i vyn, sa att en ruta som hamnat utanfor anda syns.
+VY_MARGINAL = 150
+
+# Den senaste bilden. "Spara" visar da vad de nya rutorna laser i exakt samma
+# bild som man drog i, och sidan behover inte ta nya bilder varje gang.
+_BILD: dict[str, Any] = {"stack": None, "frames": [], "jpeg": None, "tagen": None}
+_BILD_LAS = threading.Lock()
+
+
+def _kalibreringsfil() -> Path:
+    """Var kalibreringen ligger - las vid anropet, sa att ett test kan byta fil."""
+    from config import load_config
+
+    return load_config().calibration_file
+
+
+def _las_kalibrering() -> tuple[Any, str]:
+    """Kalibreringen ur filen, och ett felmeddelande om den inte gick att lasa.
+
+    Saknas filen far granssnittet anda visa en bild - annars gar den forsta
+    kalibreringen inte att gora darifran.
+    """
+    from config import load_config
+    from display_reader import Calibration, ReaderError
+
+    cfg = load_config()
+    try:
+        return Calibration.load(_kalibreringsfil()), ""
+    except (ReaderError, ValueError, TypeError, KeyError) as exc:
+        roi = tuple(cfg.calibration_roi) if cfg.calibration_roi else (0, 0, 0, 0)
+        return Calibration(roi=roi, digit_count=cfg.reader.digit_count or 4), str(exc)
+
+
+def _ta_bilder(
+    antal: int = KALIBRERINGS_BILDER, intervall: float = KALIBRERINGS_INTERVALL_S
+) -> list[Any]:
+    """Tar farska bilder fran kameran."""
+    from camera import CameraError, HikvisionCamera
+    from config import load_config
+
+    cfg = load_config()
+    if not cfg.camera.ip:
+        raise ValueError("kamerans adress saknas - fyll i den under Installningar")
+
+    kamera = HikvisionCamera(cfg.camera)
+    bilder: list[Any] = []
+    try:
+        for nummer in range(max(1, antal)):
+            start = time.perf_counter()
+            try:
+                bilder.append(kamera.snapshot().image)
+            except CameraError as exc:
+                log.warning("kameran svarade inte pa bild %d: %s", nummer + 1, exc)
+            kvar = intervall - (time.perf_counter() - start)
+            if nummer < antal - 1 and kvar > 0:
+                time.sleep(kvar)
+    finally:
+        kamera.close()
+
+    if not bilder:
+        raise ValueError("kameran svarade inte - se loggen")
+    return bilder
+
+
+def _tidsstack(frames: list[Any]) -> Any:
+    """En bild dar ALLA sidor syns: den ljusaste pixeln av varje.
+
+    Displayen visar en sida i taget, och pa vardesidan ar forsta positionen
+    slackt. Genom att lagga bilderna ovanpa varandra syns en siffra i varje
+    position, och da gar det att se om en ruta sitter ratt.
+    """
+    import numpy as np
+
+    return np.max(np.stack(frames), axis=0)
+
+
+def vy_runt(
+    roi: tuple[int, int, int, int], storlek: tuple[int, int], marginal: int = VY_MARGINAL
+) -> tuple[int, int, int, int]:
+    """Utsnittet som visas i granssnittet: ROI:n med luft runt omkring."""
+    bredd, hojd = storlek
+    x1 = max(0, int(roi[0]) - marginal)
+    y1 = max(0, int(roi[1]) - marginal)
+    x2 = min(bredd, int(roi[2]) + marginal)
+    y2 = min(hojd, int(roi[3]) + marginal)
+    return (x1, y1, x2, y2)
+
+
+def las_med_rutorna(frames: list[Any], cal: Any) -> dict[str, Any]:
+    """Vad rutnatet laser i bilderna, och vilken siffra som ar svagast."""
+    from config import load_config
+    from display_reader import read_image
+
+    cfg = load_config()
+    vald: Any = None
+    for bild in frames:
+        try:
+            lasning = read_image(bild, cal, cfg.reader)
+        except Exception as exc:  # noqa: BLE001 - en trasig bild far inte stoppa vyn
+            log.warning("kunde inte tolka en bild: %s", exc)
+            continue
+        # En vardesida - vardet star i position 2-4 - ar den vi vill visa.
+        vardesida = bool(lasning.digits) and lasning.digits[0].blank
+        if lasning.ok and lasning.confidence > 0 and vardesida:
+            vald = lasning
+            break
+        if vald is None or lasning.confidence > vald.confidence:
+            vald = lasning
+
+    if vald is None:
+        return {
+            "ok": False,
+            "varde": "",
+            "display": "",
+            "konfidens": 0.0,
+            "siffror": [],
+            "text": "kunde inte tolka bilden alls",
+        }
+
+    siffror = [
+        {"position": index, "tecken": digit.char, "konfidens": round(digit.confidence, 2)}
+        for index, digit in enumerate(vald.digits, start=1)
+    ]
+    tande = [item for item in siffror if item["tecken"] != " "]
+    svagast = min(tande, key=lambda item: item["konfidens"], default=None)
+    display = ""
+    if vald.numeric is not None:
+        display = f"{vald.numeric:.{vald.decimals}f}"
+
+    if vald.ok and vald.confidence > 0:
+        text = f"rutorna laser {display} (konfidens {vald.confidence:.2f})"
+    elif not vald.digits:
+        text = "ingen siffra hittades - sitter rutorna innanfor displayen?"
+    else:
+        text = "rutorna pekar fel - ingen siffra gick att lasa"
+
+    return {
+        "ok": bool(vald.ok and vald.confidence > 0),
+        "varde": vald.value or "",
+        "display": display,
+        "konfidens": round(vald.confidence, 2),
+        "siffror": siffror,
+        "svagast": svagast,
+        "text": text,
+    }
+
+
+def _koda_bild(stack: Any) -> bytes | None:
+    """Gor om tidsstacken till en JPEG som sidan kan visa."""
+    try:
+        import cv2
+
+        ok, kodad = cv2.imencode(".jpg", stack, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
+        return kodad.tobytes() if ok else None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("kunde inte koda kalibreringsbilden: %s", exc)
+        return None
+
+
+def _spara_bilden(frames: list[Any]) -> None:
+    """Kommer ihag de sista bilderna, sa att 'Spara' kan visa dem igen."""
+    with _BILD_LAS:
+        stack = _tidsstack(frames)
+        _BILD["frames"] = frames
+        _BILD["stack"] = stack
+        _BILD["jpeg"] = _koda_bild(stack)
+        _BILD["tagen"] = time.time()
+
+
+def kalibreringsvy(*, ta_nya: bool = False) -> dict[str, Any]:
+    """Kalibreringen, en bild av displayen och vad rutorna laser i den."""
+    from config import load_config
+
+    cfg = load_config()
+    if ta_nya or not _BILD["frames"]:
+        _spara_bilden(_ta_bilder())
+
+    cal, fel = _las_kalibrering()
+    hojd, bredd = _BILD["stack"].shape[:2]
+    roi = tuple(cal.roi) if cal.valid else (0, 0, bredd, hojd)
+    tagen = float(_BILD["tagen"] or time.time())
+
+    return {
+        "ok": True,
+        "version": VERSION,
+        "roi": list(roi),
+        "vy": list(vy_runt(roi, (bredd, hojd))),
+        "storlek": [bredd, hojd],
+        "cell_boxes": [list(box) for box in cal.cell_boxes],
+        "digit_count": int(cal.digit_count or cfg.reader.digit_count or 4),
+        "kalibrering_saknas": bool(fel),
+        "fel": fel,
+        "bild_url": f"/api/calibration/bild?t={int(tagen)}" if _BILD["jpeg"] else "",
+        "lasning": las_med_rutorna(_BILD["frames"], cal),
+        "text": f"bild tagen {datetime.fromtimestamp(tagen).strftime('%H:%M:%S')}"
+        f" ({len(_BILD['frames'])} bilder)",
+    }
+
+
+def _giltiga_rutor(ra: Any, antal: int) -> list[tuple[int, int, int, int]]:
+    """Kontrollerar rutorna - en ruta som ar fel ger en tyst fel lasning."""
+    if not isinstance(ra, list) or len(ra) != antal:
+        raise ValueError(f"det ska vara {antal} rutor (en per siffra)")
+    rutor: list[tuple[int, int, int, int]] = []
+    for index, ruta in enumerate(ra, start=1):
+        if not isinstance(ruta, (list, tuple)) or len(ruta) != 4:
+            raise ValueError(f"ruta {index}: x1,y1,x2,y2 kravs")
+        try:
+            x1, y1, x2, y2 = (int(round(float(varde))) for varde in ruta)
+        except (TypeError, ValueError):
+            raise ValueError(f"ruta {index}: bara siffror") from None
+        if x2 - x1 < MIN_CELL_PX or y2 - y1 < MIN_CELL_PX:
+            raise ValueError(f"ruta {index} ar for liten (minst {MIN_CELL_PX} px)")
+        if min(x1, y1) < 0 or max(x2, y2) > 4096:
+            raise ValueError(f"ruta {index} ligger utanfor bilden")
+        rutor.append((x1, y1, x2, y2))
+    return rutor
+
+
+def spara_kalibrering(payload: dict[str, Any]) -> dict[str, Any]:
+    """Sparar rutnatet och visar vad det laser i samma bild som man drog i."""
+    from config import load_config
+    from display_reader import Calibration
+    from settings_store import apply_changes
+
+    cfg = load_config()
+    cal, _fel = _las_kalibrering()
+    antal = int(cal.digit_count or cfg.reader.digit_count or 4)
+    rutor = _giltiga_rutor(payload.get("cell_boxes"), antal)
+
+    # ROI:n maste rymma rutorna - annars klipps siffran bort innan rutorna ens
+    # far se den. Den vaxer bara, den krymps aldrig.
+    gammal = tuple(cal.roi) if cal.valid else (0, 0, 0, 0)
+    ny_roi = (
+        max(0, min(gammal[0], min(box[0] for box in rutor) - ROI_MARGINAL)),
+        max(0, min(gammal[1], min(box[1] for box in rutor) - ROI_MARGINAL)),
+        max(gammal[2], max(box[2] for box in rutor) + ROI_MARGINAL),
+        max(gammal[3], max(box[3] for box in rutor) + ROI_MARGINAL),
+    )
+
+    ny = Calibration(
+        roi=ny_roi,
+        digit_count=antal,
+        cell_boxes=list(rutor),
+        notes=f"rutnat flyttat i granssnittet {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+    )
+    ny.save(_kalibreringsfil())
+
+    roi_text = ""
+    if ny_roi != gammal:
+        # Verktygen (tools/fit_cells.py, main.py calibrate) mater mot ROI:n i
+        # .env - utan den har raden skulle de mata mot ett gammalt utsnitt.
+        changed, problems = apply_changes(
+            {"CALIBRATION_ROI": ",".join(str(varde) for varde in ny_roi)}
+        )
+        if changed and not problems:
+            roi_text = f" - utsnittet vidgat till {','.join(str(v) for v in ny_roi)}"
+        elif problems:
+            roi_text = " - OBS: utsnittet behovde vidgas men gick inte att skriva i .env"
+
+    lasning = las_med_rutorna(_BILD["frames"], ny) if _BILD["frames"] else {}
+    return {
+        "ok": True,
+        "version": VERSION,
+        "roi": list(ny_roi),
+        "cell_boxes": [list(box) for box in rutor],
+        "lasning": lasning,
+        "text": f"rutnatet sparat{roi_text}",
+    }
+
+
+def mat_kalibrering() -> dict[str, Any]:
+    """Mater fram rutnatet i farska bilder - samma vag som 'main.py calibrate'."""
+    from config import load_config
+    from display_reader import ReaderError, measure_cells
+
+    cfg = load_config()
+    cal, _fel = _las_kalibrering()
+    roi = tuple(cal.roi) if cal.valid else tuple(cfg.calibration_roi or (0, 0, 0, 0))
+    if not (roi[2] > roi[0] and roi[3] > roi[1]):
+        raise ValueError("CALIBRATION_ROI saknas - fyll i utsnittet under Installningar forst")
+
+    frames = _ta_bilder()
+    prior = [tuple(box) for box in cal.cell_boxes] or None
+    try:
+        rutor, rapport = measure_cells(
+            frames, roi, cfg.reader, cfg.reader.digit_count, prior=prior
+        )
+    except ReaderError as exc:
+        raise ValueError(f"kunde inte mata rutnatet: {exc}") from None
+
+    _spara_bilden(frames)
+    svar = spara_kalibrering({"cell_boxes": [list(box) for box in rutor]})
+    svar["rapport"] = list(rapport)
+    svar["text"] = "rutnatet matt fram och sparat"
+    return svar
+
+
 def start_run() -> dict[str, Any]:
     """Startar en lasning i bakgrunden - den tar en dryg minut."""
     if get_state().get("running"):
@@ -516,6 +837,21 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
                     log.exception("kameravagen kraschade")
                     self._send_json({"ok": False, "text": f"kunde inte lasa kameran: {exc}"})
                 return
+            if path == "/api/calibration":
+                # Tar bilder fran kameran forsta gangen (nagra sekunder), sedan
+                # serveras den bilden - sa att sidan kan ritas om snabbt.
+                try:
+                    self._send_json(kalibreringsvy())
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("kalibreringsvyn kraschade")
+                    self._send_json({"ok": False, "text": f"kunde inte hamta nagon bild: {exc}"})
+                return
+            if path == "/api/calibration/bild":
+                if not _BILD["jpeg"]:
+                    self._send_json({"ok": False, "error": "ingen bild tagen an"}, status=404)
+                    return
+                self._send_bytes(_BILD["jpeg"], "image/jpeg")
+                return
 
             self._send_json({"ok": False, "error": f"okand vag {path}"}, status=404)
 
@@ -588,6 +924,29 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
                     )
                     return
                 self._send_json(camera_action(str(payload.get("action") or ""), payload.get("values")))
+                return
+
+            if path in {"/api/calibration", "/api/calibration/ny", "/api/calibration/mat"}:
+                # Kalibreringen ror kameran och skriver calibration.json, sa den
+                # gar pa samma villkor som en lasning direkt.
+                if not (allow_read and STATUS_ALLOW_RUN):
+                    self._send_json(
+                        {"ok": False, "text": "kalibreringen ar last (STATUS_ALLOW_RUN)"},
+                        status=403,
+                    )
+                    return
+                try:
+                    if path.endswith("/ny"):
+                        self._send_json(kalibreringsvy(ta_nya=True))
+                    elif path.endswith("/mat"):
+                        self._send_json(mat_kalibrering())
+                    else:
+                        self._send_json(spara_kalibrering(payload))
+                except ValueError as exc:
+                    self._send_json({"ok": False, "text": str(exc)}, status=400)
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("kalibreringen kraschade")
+                    self._send_json({"ok": False, "text": f"kalibreringen kraschade: {exc}"})
                 return
 
             self._send_json({"ok": False, "error": f"okand vag {path}"}, status=404)

@@ -13,6 +13,31 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.22.0 — 2026-09-27
+
+**Rutan som ser siffrorna kan flyttas i gränssnittet.**
+
+* Kameran sitter i en källare och får en knuff när saltet fylls på. Då pekar rutnätet
+  (`cell_boxes` i `calibration.json`) fel och inget värde publiceras — och att rätta till det krävde
+  att man mätte på en annan maskin och kopierade in filen i containern.
+* Ny panel **"Rutan som ser siffrorna"**: bilden av displayen med de fyra rutorna ovanpå. Bilden är
+  en **tidsstack** (den ljusaste pixeln av flera bilder), så att en siffra syns i varje position —
+  på värdesidan är första positionen ju släckt.
+* **Dra i en ruta** (eller markera den och använd piltangenterna; skift tar tio steg) och tryck
+  **Spara & läs**. Rutan blir grön, gul eller röd beroende på vad siffran under den läser
+  (säker / osäker / går inte att läsa), och panelen visar varje positions tecken och konfidens.
+  "Flytta alla fyra samtidigt" är på som standard — kameran rubbas ju som en helhet.
+* **Mät automatiskt** mäter fram rutnätet i färska bilder (samma väg som `main.py calibrate`) och
+  sparar det. **Ny bild** tar en ny tidsstack, **Ångra** läser om det sparade.
+* Hamnar en ruta utanför utsnittet (`CALIBRATION_ROI`) vidgas utsnittet automatiskt vid sparandet —
+  annars klipps siffran bort innan rutan ens får se den — och `CALIBRATION_ROI` skrivs också till
+  `.env`, eftersom verktygen mäter mot den.
+* Nya vägar i API:t: `GET /api/calibration`, `GET /api/calibration/bild`,
+  `POST /api/calibration` (spara), `POST /api/calibration/ny` och `POST /api/calibration/mat`.
+  De skriver till `calibration.json` — samma fil som verktygen — så nästa läsning använder de nya
+  rutorna utan omstart.
+* Sex nya tester mot syntetiska bilder (ingen kamera inblandad).
+
 ## 0.21.0 — 2026-09-27
 
 **Ett värde med en tvåa i sista siffran kunde inte publiceras alls.**

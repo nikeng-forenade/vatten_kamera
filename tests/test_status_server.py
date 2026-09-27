@@ -380,3 +380,168 @@ def test_granssnittet_visar_senaste_last_varde_aven_efter_omstart(server: Status
     assert data["unit"] == "l"
     assert data["confidence"] == 0.85
     assert data["read_at"] == "2026-09-21T17:51:10"
+
+
+# --- Kalibreringen: flytta rutorna i granssnittet -------------------------
+#
+# Kameran sitter i en kallare och far en knuff nar saltet fylls pa. Da pekar
+# rutorna fel och inget varde publiceras, sa rutorna maste ga att flytta utan att
+# mata pa en annan maskin. Testerna kor mot syntetiska bilder i stallet for
+# kameran.
+
+
+def syntetiska_bilder(text: str = " 132", antal: int = 3):
+    """Bilder som ser ut som displayen, och rutorna siffrorna ritades i."""
+    import cv2
+    import numpy as np
+
+    from segments import render_number
+
+    bilder = []
+    rutor: list[tuple[int, int, int, int]] = []
+    for _ in range(antal):
+        canvas, boxes = render_number(text, digit_width=60, digit_height=110)
+        bilder.append(
+            cv2.cvtColor(np.clip(canvas * 255.0, 0, 255).astype("uint8"), cv2.COLOR_GRAY2BGR)
+        )
+        rutor = [tuple(box) for box in boxes]
+    return bilder, rutor
+
+
+@pytest.fixture
+def kalibreringen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """En egen kalibreringsfil och .env, sa att testerna inte ror installationen."""
+    import config
+    import settings_store
+    from config import ReaderConfig
+    from types import SimpleNamespace
+
+    bilder, rutor = syntetiska_bilder()
+    hojd, bredd = bilder[0].shape[:2]
+    fil = tmp_path / "calibration.json"
+    fil.write_text(
+        json.dumps(
+            {
+                "roi": [0, 0, bredd, hojd],
+                "digit_count": 4,
+                "cell_boxes": [list(box) for box in rutor],
+                "notes": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = SimpleNamespace(
+        reader=ReaderConfig(
+            digit_count=4, upscale=1.0, decimals=2, require_blank_first=True
+        ),
+        calibration_roi=(0, 0, bredd, hojd),
+    )
+    monkeypatch.setattr(status_server, "_kalibreringsfil", lambda: fil)
+    monkeypatch.setattr(config, "load_config", lambda: cfg)
+    monkeypatch.setattr(settings_store, "ENV_FILE", tmp_path / ".env")
+    monkeypatch.setattr(status_server, "_ta_bilder", lambda *a, **kw: syntetiska_bilder()[0])
+    monkeypatch.setattr(
+        status_server, "_BILD", {"stack": None, "frames": [], "jpeg": None, "tagen": None}
+    )
+    return fil
+
+
+def test_kalibreringsvyn_visar_bilden_och_rutorna(server: StatusServer, kalibreringen: Path) -> None:
+    status, data = hamta(server, "/api/calibration")
+
+    assert status == 200
+    assert data["ok"] is True
+    assert len(data["cell_boxes"]) == 4
+    # Vyn visar ROI:n med luft runt omkring, sa att en ruta som hamnat utanfor syns.
+    vy, roi = data["vy"], data["roi"]
+    assert vy[0] <= roi[0] and vy[1] <= roi[1] and vy[2] >= roi[2] and vy[3] >= roi[3]
+    assert data["bild_url"].startswith("/api/calibration/bild")
+    # Sidan visar en vardesida: vardet star i position 2-4.
+    assert data["lasning"]["display"] == "1.32"
+    assert [siffra["tecken"] for siffra in data["lasning"]["siffror"]] == [" ", "1", "3", "2"]
+
+    status, bild = hamta(server, data["bild_url"])
+    assert status == 200
+    assert isinstance(bild, bytes)
+    assert bild[:2] == b"\xff\xd8", "bilden ska vara en JPEG"
+
+
+def test_kalibreringen_sparas_i_verktygens_format(server: StatusServer, kalibreringen: Path) -> None:
+    """Filen maste se ut som tools/fit_cells.py skriver den - samma lasare."""
+    nya = [
+        [1016, 0, 1112, 100],
+        [1136, 13, 1232, 113],
+        [1254, 21, 1349, 121],
+        [1367, 37, 1462, 137],
+    ]
+
+    status, data = hamta(server, "/api/calibration", {"cell_boxes": nya})
+
+    assert status == 200
+    assert data["ok"] is True
+    sparad = json.loads(kalibreringen.read_text(encoding="utf-8"))
+    assert sparad["cell_boxes"] == nya
+    assert sparad["digit_count"] == 4
+    assert sparad["roi"] == data["roi"]
+    assert sparad["notes"]
+    assert "lasning" in data
+
+
+def test_kalibreringen_vagrar_orimliga_rutor(server: StatusServer, kalibreringen: Path) -> None:
+    """En ruta som ar fel ger en tyst fel lasning - hellre ett tydligt nej."""
+    status, data = hamta(server, "/api/calibration", {"cell_boxes": [[0, 0, 5, 5]] * 4})
+    assert status == 400
+    assert "for liten" in data["text"]
+
+    status, data = hamta(server, "/api/calibration", {"cell_boxes": [[0, 0, 60, 60]]})
+    assert status == 400
+    assert "4 rutor" in data["text"]
+
+
+def test_utsnittet_vidgas_nar_en_ruta_hamnar_utanfor(
+    server: StatusServer, kalibreringen: Path
+) -> None:
+    """ROI:n klipper bilden innan rutorna far se den - den maste rymma rutorna."""
+    import settings_store
+
+    rutor = [
+        [1400, 300, 1500, 400],
+        [1600, 300, 1700, 400],
+        [1800, 300, 1900, 400],
+        [2000, 300, 2100, 400],
+    ]
+
+    status, data = hamta(server, "/api/calibration", {"cell_boxes": rutor})
+
+    assert status == 200
+    assert data["roi"][2] >= 2100, "ROI:n rymmer inte sista rutan"
+    assert data["roi"][3] >= 400
+    sparad = json.loads(kalibreringen.read_text(encoding="utf-8"))
+    assert sparad["roi"] == data["roi"]
+    env = settings_store.ENV_FILE.read_text(encoding="utf-8")
+    assert "CALIBRATION_ROI" in env, "verktygen mater mot ROI:n i .env"
+    assert "vidgat" in data["text"]
+
+
+def test_mat_automatiskt_mater_fram_rutorna(server: StatusServer, monkeypatch: pytest.MonkeyPatch, kalibreringen: Path) -> None:
+    """Samma vag som 'main.py calibrate' - utan att man behover komma at maskinen."""
+    # Fyra tända siffror: matningen behover en siffra i varje position.
+    monkeypatch.setattr(status_server, "_ta_bilder", lambda *a, **kw: syntetiska_bilder("1320")[0])
+
+    status, data = hamta(server, "/api/calibration/mat", {})
+
+    assert status == 200
+    assert data["ok"] is True
+    assert len(data["cell_boxes"]) == 4
+    assert data["rapport"], "matningen ska beratta vad den gjorde"
+
+
+def test_kalibreringspanelen_finns_i_sidan() -> None:
+    """Panelen ska finnas i sidan - annars gar rutorna bara att flytta i koden."""
+    sida = (Path(status_server.__file__).resolve().parent / "web" / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+    for del_ in ('id="kalVy"', 'id="kalDuk"', 'id="kalRutor"', 'id="kalSpara"', 'id="kalMat"'):
+        assert del_ in sida
+    assert "/api/calibration" in sida
