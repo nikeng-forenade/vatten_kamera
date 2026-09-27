@@ -13,6 +13,23 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.27.0 — 2026-09-27
+
+**En avbruten körning publicerar inget värde — och att bara öppna panelen stör inte läsningen.**
+
+* **Felet**: en körning som avbryts för att gränssnittet ska kalibrera hinner inte se hela sidvarvet.
+  Utan spolttidssidan `02:00` går värdesidan och flödessidan inte att skilja åt — båda kan visa `0.00`
+  — och röstningen publicerade då **flödessidan som värde**. Mätt 27/9: körningen 13:58 avbröts efter
+  13 bilder och publicerade `0.00` fast displayen visade 1.30.
+* `far_publicera()`: är körningen avbruten och spolttidssidan inte sedd publiceras **inget**, och raden
+  i historiken säger varför. Är värdet redan fångat efter `02:00` publiceras det som vanligt.
+* **Att bara öppna panelen rör inte kameran**: `GET /api/calibration` tar bara bilder när ingen läsning
+  pågår — annars svarar den "en läsning pågår, öppna panelen igen om en stund". Det är bara **Ny bild**
+  och **Mät automatiskt** som tar över kameran (och väntar tills läsningen släppt).
+* Två nya tester — och det ena fångade direkt en bugg i den nya vyn (den ritade vidare utan bild).
+* Den felaktiga raden (`0.00`) togs bort ur historiken i containern, så grafen inte visar ett dyk som
+  aldrig hände.
+
 ## 0.26.0 — 2026-09-27
 
 **Utsnittet växer bara när det behövs — och notisen säger vad som gjordes.**

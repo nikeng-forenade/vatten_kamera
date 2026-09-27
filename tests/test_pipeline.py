@@ -20,6 +20,7 @@ from config import ReaderConfig, RunConfig
 from display_reader import Reading, consensus
 from pipeline import (
     _page_value_av,
+    far_publicera,
     flow_targets,
     has_recharge_page,
     page_kind,
@@ -454,6 +455,29 @@ def test_korningen_haller_bara_de_sista_bilderna_i_minnet(
         "bufferten vaxer med fonstret - minnet tar slut i containern"
     )
     assert pipeline.MAX_BUFFERED_FRAMES >= 100, "for kort buffert for en hel sida"
+
+
+def test_avbruten_korning_publicerar_inget_utan_spolttidssidan() -> None:
+    """Utan 02:00 gar vardet och flodet inte att skilja at.
+
+    Granssnittet avbryter en korning nar det ska kalibrera (kameran svarar bara
+    en i taget). Uppmatt 2026-09-27: en korning som avbrots efter 13 bilder
+    publicerade flodessidan 0.00 som varde, for utan spolttidssidan rostade den
+    om hela fonstret.
+    """
+    utan_spolttid = [flodes_sida("000", bilder=6), annan_tidssida("1353", bilder=7)]
+
+    far, notis = far_publicera(utan_spolttid, avbruten=True)
+
+    assert far is False, "flodessidan far inte bli vardet"
+    assert "spolttidssidan" in notis
+
+    # Avbrott EFTER spolttidssidan: vardet ar redan fangat och far publiceras.
+    med_spolttid = [spoltid(bilder=3), varde("130", 0.75, bilder=10), flodes_sida("000", bilder=2)]
+    assert far_publicera(med_spolttid, avbruten=True)[0] is True
+
+    # Ingen avbrott alls: som forut.
+    assert far_publicera(utan_spolttid, avbruten=False)[0] is True
 
 
 def test_korningen_slapper_kameran_nar_granssnittet_ber_om_det(

@@ -651,9 +651,29 @@ def kalibreringsvy(*, ta_nya: bool = False) -> dict[str, Any]:
     from config import load_config
 
     cfg = load_config()
-    if ta_nya or not _BILD["frames"]:
+    if ta_nya:
         _spara_bilden(_ta_bilder())
-
+    elif not _BILD["frames"]:
+        # Ingen bild tagen an. Ar en lasning i gang vantar vi hellre: kameran
+        # svarar bara en i taget, och en avbruten lasning hinner inte se hela
+        # sidvarvet. "Ny bild" och "Mat automatiskt" tar over kameran med flit.
+        if get_state().get("running"):
+            cal, fel = _las_kalibrering()
+            return {
+                "ok": True,
+                "version": VERSION,
+                "roi": list(cal.roi),
+                "vy": [0, 0, 1, 1],
+                "storlek": [0, 0],
+                "cell_boxes": [list(box) for box in cal.cell_boxes],
+                "digit_count": int(cal.digit_count or cfg.reader.digit_count or 4),
+                "kalibrering_saknas": bool(fel),
+                "fel": fel,
+                "bild_url": "",
+                "lasning": {},
+                "text": "en lasning pagar - oppna panelen igen om en stund, eller tryck 'Ny bild'",
+            }
+        _spara_bilden(_ta_bilder())
     cal, fel = _las_kalibrering()
     hojd, bredd = _BILD["stack"].shape[:2]
     roi = tuple(cal.roi) if cal.valid else (0, 0, bredd, hojd)

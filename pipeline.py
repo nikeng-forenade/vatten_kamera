@@ -660,6 +660,13 @@ class NightlyRunner:
                 stop_when_ready=stop_early,
             )
 
+            # Blev korningen avbruten (granssnittet behovde kameran)? Da har den
+            # inte sett ett helt varv, och far darfor inte publicera nagot om
+            # spolttidssidan inte hanns med.
+            far_publicera_varde, avbrottsnotis = far_publicera(
+                readings, avbruten=avbrott_begart()
+            )
+
             # Vardet som ska ut visas strax efter att pumpen slog om till spolning
             # (02:00). Sidvarvet ar: klockan -> spolttiden -> VARDET -> flodet,
             # och bada vardesidorna (t.ex. 0.91 och 0.00) ser likadana ut for
@@ -667,6 +674,8 @@ class NightlyRunner:
             # ordningen i varvet skiljer dem at, och forst kommer vardet. Darfor
             # rostas bara det som kommer efter spolttidssidan.
             target, page_note = voting_targets(readings)
+            if not far_publicera_varde:
+                target, page_note = [], avbrottsnotis
             voted = {id(reading) for reading in target}
             # Flodet star pa sidan efter vardet. Den rostas for sig, och bara om
             # den gar att lasa - ett felaktigt flode skulle kunna se ut som ett
@@ -1127,6 +1136,23 @@ def voting_targets(readings: list[Reading]) -> tuple[list[Reading], str]:
             " den - vardet och flodet gar inte att skilja at"
         )
     return list(readings), ""
+
+
+def far_publicera(readings: list[Reading], *, avbruten: bool) -> tuple[bool, str]:
+    """Far den har korningen publicera ett varde alls?
+
+    En korning som granssnittet avbrot (for att kalibrera) har inte sett ett
+    helt varv. Utan spolttidssidan (displayens 02:00) gar vardesidan och
+    flodessidan inte att skilja at - bada kan visa 0.00 - sa da far inget varde
+    publiceras. Uppmatt 2026-09-27: ett avbrott efter 13 bilder publicerade
+    0.00 som varde.
+    """
+    if avbruten and not has_recharge_page(readings):
+        return False, (
+            "korningen avbruten innan spolttidssidan syntes - vardet och flodet gar"
+            " inte att skilja at, sa inget varde publiceras"
+        )
+    return True, ""
 
 
 def readings_after_recharge(readings: list[Reading]) -> list[Reading]:

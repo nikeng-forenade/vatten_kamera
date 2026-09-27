@@ -550,6 +550,27 @@ def test_mat_automatiskt_mater_fram_rutorna(server: StatusServer, monkeypatch: p
     assert data["rapport"], "matningen ska beratta vad den gjorde"
 
 
+def test_vyn_ror_inte_kameran_medan_en_lasning_pagar(
+    server: StatusServer, monkeypatch: pytest.MonkeyPatch, kalibreringen: Path
+) -> None:
+    """Kameran svarar bara en i taget: att bara oppna panelen far inte stora en
+    lasning - och en avbruten lasning hinner inte se hela sidvarvet."""
+
+    def bom(*a: object, **kw: object) -> list[object]:
+        raise AssertionError("kameran skulle inte roras")
+
+    monkeypatch.setattr(status_server, "_ta_bilder", bom)
+    status_server.set_state(running=True)
+    try:
+        status, data = hamta(server, "/api/calibration")
+    finally:
+        status_server.set_state(running=False)
+
+    assert status == 200
+    assert data["bild_url"] == "", "ingen bild tas medan lasningen pagar"
+    assert "lasning pagar" in data["text"]
+
+
 def test_kalibreringen_ber_lasningen_slappa_kameran(
     server: StatusServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:

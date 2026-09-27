@@ -835,7 +835,12 @@ function kalRita() {
   const vy = kal.vy;
   const duk = $('kalDuk');
   const lager = $('kalRutor');
-  if (!kal.bild || vy[2] <= vy[0]) return;
+  if (!kal.bild) {
+    duk.getContext('2d').clearRect(0, 0, duk.width, duk.height);
+    lager.innerHTML = '';
+    return;
+  }
+  if (vy[2] <= vy[0]) return;
   const skala = kalSkala();
   duk.width = Math.round((vy[2] - vy[0]) * skala);
   duk.height = Math.round((vy[3] - vy[1]) * skala);
