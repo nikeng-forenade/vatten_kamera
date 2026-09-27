@@ -536,6 +536,30 @@ def test_mat_automatiskt_mater_fram_rutorna(server: StatusServer, monkeypatch: p
     assert data["rapport"], "matningen ska beratta vad den gjorde"
 
 
+def test_kalibreringen_ber_lasningen_slappa_kameran(
+    server: StatusServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """En korning som letar forgaves kan halla pa i 30 min - den maste slappa.
+
+    Kameran svarar bara en i taget, sa kalibreringen ber korningen sluta ta
+    bilder och vantar tills den ar klar.
+    """
+    import pipeline
+
+    pipeline._AVBRYT.clear()  # noqa: SLF001 - flaggan ar sjalva saken har
+    status_server.set_state(running=False)
+
+    assert status_server.vanta_pa_kameran(timeout_s=0.1) is True
+    assert pipeline.avbrott_begart() is False, "ingen lasning - inget att avbryta"
+
+    status_server.set_state(running=True)
+    assert status_server.vanta_pa_kameran(timeout_s=0.1) is False, "vantan ger upp"
+    assert pipeline.avbrott_begart() is True, "korningen ska bli ombedd att sluta"
+
+    pipeline._AVBRYT.clear()  # noqa: SLF001 - stadar efter testet
+    status_server.set_state(running=False)
+
+
 def test_kalibreringspanelen_finns_i_sidan() -> None:
     """Panelen ska finnas i sidan - annars gar rutorna bara att flytta i koden."""
     sida = (Path(status_server.__file__).resolve().parent / "web" / "index.html").read_text(
@@ -545,3 +569,6 @@ def test_kalibreringspanelen_finns_i_sidan() -> None:
     for del_ in ('id="kalVy"', 'id="kalDuk"', 'id="kalRutor"', 'id="kalSpara"', 'id="kalMat"'):
         assert del_ in sida
     assert "/api/calibration" in sida
+    # Panelerna ska ga att stanga, och vara stangda nar man kommer in.
+    assert 'details class="panel"' in sida
+    assert "<summary" in sida

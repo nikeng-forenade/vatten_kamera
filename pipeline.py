@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from collections import Counter, deque
 from collections.abc import Callable
@@ -415,6 +416,9 @@ class NightlyRunner:
         flode_frist: float | None = None
 
         while time.time() < deadline:
+            if _AVBRYT.is_set():
+                log.info("korningen avbruten - kameran behovs till nagot annat")
+                break
             frame_started = time.time()
             index += 1
 
@@ -626,6 +630,7 @@ class NightlyRunner:
 
         log.info("startar korning (version %s), fonster %.0f s", VERSION, duration)
         set_state(running=True, started=started.isoformat(timespec="seconds"))
+        _AVBRYT.clear()
         self._stada_bilder()
 
         try:
@@ -991,6 +996,22 @@ def page_kind(reading: Reading) -> str:
     if reading.ok and reading.confidence > 0.0:
         return "varde"
     return "okant"
+
+
+# Nar granssnittet ska kalibrera om behover det kameran sjalv: kameran (en
+# 2014-modell) svarar bara en i taget, och tva samtidiga pollningar ger
+# 'Connection aborted' - da tar bada dubbelt sa lang tid i stallet.
+_AVBRYT = threading.Event()
+
+
+def begar_avbrott() -> None:
+    """Ber en pagaende korning att sluta ta bilder (kameran behovs till annat)."""
+    _AVBRYT.set()
+
+
+def avbrott_begart() -> bool:
+    """Ar en korning ombedd att sluta ta bilder?"""
+    return _AVBRYT.is_set()
 
 
 # Hur manga bilder korningen haller i minnet samtidigt.

@@ -460,6 +460,28 @@ def _las_kalibrering() -> tuple[Any, str]:
         return Calibration(roi=roi, digit_count=cfg.reader.digit_count or 4), str(exc)
 
 
+def vanta_pa_kameran(timeout_s: float = 30.0) -> bool:
+    """Ber en pagaende lasning att sluta, och vantar tills kameran ar ledig.
+
+    Kameran (en 2014-modell) svarar bara en i taget: tva samtidiga pollningar ger
+    'Connection aborted', och da tar bada dubbelt sa lang tid i stallet. En
+    korning som letar forgaves kan halla pa i 30 minuter, sa den maste slappa.
+    """
+    from pipeline import begar_avbrott
+
+    if not get_state().get("running"):
+        return True
+    begar_avbrott()
+    slut = time.time() + timeout_s
+    while time.time() < slut:
+        if not get_state().get("running"):
+            log.info("kalibreringen tar over kameran - lasningen avbruten")
+            return True
+        time.sleep(0.5)
+    log.warning("en lasning paga fortfarande - kalibrerar anda, det tar langre tid")
+    return False
+
+
 def _ta_bilder(
     antal: int = KALIBRERINGS_BILDER, intervall: float = KALIBRERINGS_INTERVALL_S
 ) -> list[Any]:
@@ -471,6 +493,7 @@ def _ta_bilder(
     if not cfg.camera.ip:
         raise ValueError("kamerans adress saknas - fyll i den under Installningar")
 
+    vanta_pa_kameran()
     kamera = HikvisionCamera(cfg.camera)
     bilder: list[Any] = []
     try:

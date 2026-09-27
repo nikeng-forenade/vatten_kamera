@@ -13,6 +13,20 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.24.0 — 2026-09-27
+
+**Kalibreringen tar kameran för sig själv — och en läsning som letar förgäves släpper.**
+
+* Kameran (2014 års modell) svarar bara **en klient i taget**. När en läsning pågick samtidigt som
+  man kalibrerade svarade den `Connection aborted`, och båda tog dubbelt så lång tid: "Mät
+  automatiskt" kunde hålla på i minuter i stället för en halv minut.
+* Ny avbrottsflagga i `pipeline.py` (`begar_avbrott()`): bildslingan tittar efter den mellan
+  bilderna och avslutar körningen snällt. Gränssnittet ber om avbrott och väntar (upp till 30 s) på
+  att kameran blir ledig innan det tar sina egna bilder. Flaggan nollställs när en ny körning börjar.
+* En körning som avbryts skriver sin rad i historiken som vanligt (inget värde den gången) — den
+  läste ju inget, och det ska synas.
+* Två nya tester: att slingan släpper kameran på begäran, och att väntan ger upp när tiden är slut.
+
 ## 0.23.0 — 2026-09-27
 
 **Alla paneler går att stänga — och är stängda när man kommer in.**

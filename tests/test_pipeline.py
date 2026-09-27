@@ -382,17 +382,26 @@ class FejkKamera:
         return SimpleNamespace(image=np.zeros((8, 8, 3), dtype=np.uint8), jpeg=b"bild")
 
 
-def test_korningen_haller_bara_de_sista_bilderna_i_minnet(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """En korning som aldrig hittar vardet far inte samla bilder hela fonstret.
+class FejkKameraMedAvbrott(FejkKamera):
+    """Kamera som ber korningen sluta ta bilder efter nagra stycken.
 
-    Bilderna behovs for att sla ihop lika sidor och vaga dem i rostningen, men
-    bara de sista. Utan tak vaxer minnet med hela fonstret (WINDOW_S, 30 min,
-    ~250 kB per bild) och containern - 512 MB - dor av OOM-killern mitt i
-    korningen. Uppmatt 2026-09-27: exakt sa hande det, flera ganger i rad, nar
-    kameran hade flyttat sig och ingen sida gick att lasa.
+    Sa gor granssnittet nar det ska kalibrera om: kameran svarar bara en i taget.
     """
+
+    def __init__(self, efter: int = 5) -> None:
+        super().__init__()
+        self.efter = efter
+
+    def snapshot(self) -> SimpleNamespace:
+        if self.tagna >= self.efter:
+            pipeline.begar_avbrott()
+        return super().snapshot()
+
+
+def fejkad_korning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kamera: FejkKamera, *, duration_s: float = 0.5
+) -> tuple[object, dict[str, int]]:
+    """Kor bildslingan utan kamera, nat eller vantan - och returnerar vad den sag."""
     monkeypatch.setattr(pipeline.NightlyRunner, "__init__", lambda self, cfg, **kw: None)
     instans = pipeline.NightlyRunner(None)
     instans.cfg = SimpleNamespace(
@@ -401,7 +410,7 @@ def test_korningen_haller_bara_de_sista_bilderna_i_minnet(
     )
     instans.calibration = SimpleNamespace(roi=(0, 0, 8, 8))
     instans.similarity_threshold = 8.0
-    instans.camera = FejkKamera()
+    instans.camera = kamera
 
     # En bild som aldrig gar att lasa: korningen letar vidare hela tiden.
     olasbar = Reading(value="", confidence=0.0, digits=[], timestamp=0.0, boxes=[], ok=False)
@@ -417,12 +426,49 @@ def test_korningen_haller_bara_de_sista_bilderna_i_minnet(
 
     monkeypatch.setattr(pipeline, "group_similar", grupper)
 
+    # Varje korning borjar med en ren flagga (som run_once gor).
+    pipeline._AVBRYT.clear()  # noqa: SLF001 - flaggan ar sjalva saken har
     pipeline.NightlyRunner._capture_and_read(
-        instans, duration_s=0.5, frames_dir=tmp_path, stop_when_ready=True
+        instans, duration_s=duration_s, frames_dir=tmp_path, stop_when_ready=True
     )
+    return instans, sedda
 
-    assert instans.camera.tagna > pipeline.MAX_BUFFERED_FRAMES, "for fa bilder i testet"
+
+def test_korningen_haller_bara_de_sista_bilderna_i_minnet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """En korning som aldrig hittar vardet far inte samla bilder hela fonstret.
+
+    Bilderna behovs for att sla ihop lika sidor och vaga dem i rostningen, men
+    bara de sista. Utan tak vaxer minnet med hela fonstret (WINDOW_S, 30 min,
+    ~250 kB per bild) och containern - 512 MB - dor av OOM-killern mitt i
+    korningen. Uppmatt 2026-09-27: exakt sa hande det, flera ganger i rad, nar
+    kameran hade flyttat sig och ingen sida gick att lasa.
+    """
+    kamera = FejkKamera()
+
+    instans, sedda = fejkad_korning(monkeypatch, tmp_path, kamera)
+
+    assert kamera.tagna > pipeline.MAX_BUFFERED_FRAMES, "for fa bilder i testet"
     assert sedda["antal"] == pipeline.MAX_BUFFERED_FRAMES, (
         "bufferten vaxer med fonstret - minnet tar slut i containern"
     )
     assert pipeline.MAX_BUFFERED_FRAMES >= 100, "for kort buffert for en hel sida"
+
+
+def test_korningen_slapper_kameran_nar_granssnittet_ber_om_det(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Kameran svarar bara en i taget - en korning som letar forgaves maste slappa.
+
+    Tva samtidiga pollningar ger 'Connection aborted', och da tar bade
+    kalibreringen och lasningen dubbelt sa lang tid (matt 2026-09-27).
+    """
+    kamera = FejkKameraMedAvbrott(efter=5)
+
+    instans, _sedda = fejkad_korning(monkeypatch, tmp_path, kamera, duration_s=30.0)
+
+    assert pipeline.avbrott_begart() is True
+    # Slingan slutade nar flaggan sattes i stallet for att mala hela fonstret.
+    assert kamera.tagna < 20, f"korningen tog {kamera.tagna} bilder trots avbrottet"
+    pipeline._AVBRYT.clear()  # noqa: SLF001 - stadar efter testet
