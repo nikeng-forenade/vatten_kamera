@@ -72,6 +72,30 @@ def test_kameran_initierar_camera_klassen() -> None:
     assert anrop, "SenasteBildCamera maste anropa Camera.__init__(self)"
 
 
+def test_lasning_ok_sensorn_foljer_senaste_forsoket() -> None:
+    """Binarsensorn ska visa om den SENASTE korningen gav ett varde.
+
+    Tjansten behaller det senaste vardet nar en korning missar, sa vardet sjalvt
+    (`reading.ok`) ar kvar och ser friskt ut. Laser sensorn `ok` i stallet for
+    `lasning_ok` lyser den fast och en korning som missat syns aldrig. Testet
+    laser koden som ett trad - en kommentar far inte lura det.
+    """
+    trad = ast.parse((INTEGRATION / "binary_sensor.py").read_text(encoding="utf-8"))
+    klass = next(
+        nod
+        for nod in ast.walk(trad)
+        if isinstance(nod, ast.ClassDef) and nod.name == "LasningOkSensor"
+    )
+    is_on = next(
+        nod
+        for nod in klass.body
+        if isinstance(nod, ast.FunctionDef) and nod.name == "is_on"
+    )
+    lasta = {nod.attr for nod in ast.walk(is_on) if isinstance(nod, ast.Attribute)}
+
+    assert "lasning_ok" in lasta, "LasningOkSensor maste folja lasning_ok, inte ok"
+
+
 def test_integrationen_har_alla_filer() -> None:
     for namn in (
         "__init__.py",

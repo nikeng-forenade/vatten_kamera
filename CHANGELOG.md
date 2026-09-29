@@ -13,6 +13,36 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.28.0 — 2026-09-29
+
+**En missad läsning släcker inte värdet — varken i gränssnittet eller i Home Assistant.**
+
+* **Felet**: en körning som inte fick något värde skrevs rakt in i `latest.json` med
+  `value: null`. Gränssnittet visade `–` med texten "for fa eniga lasningar", och
+  `sensor.vatten_kamera_niva` blev **unknown** i Home Assistant — allt såg dött ut, trots att
+  tjänsten mätte bra (129 av 131 körningar det dygnet). Mätt 2026-09-29 06:35: en enda körning
+  missade (sidan `052` fick konfidens 0.25 mot kravet 0.35 — samma sida hade 0.61 tio minuter
+  tidigare) och värdet försvann.
+* **Nu står det senaste värdet kvar**: `write_status` behåller värdefälten (`value`, `numeric`,
+  `display`, `read_at`, `bild`, flödet …) när en körning missar, och den missade körningen
+  beskrivs i `senaste_forsok` i stället. Bara ett nytt värde byter ut det gamla.
+* **Nycklarna skiljer på värde och försök**: `ok` = "finns ett värde att visa",
+  `lasning_ok` = "den senaste körningen gav ett värde", `senaste_forsok` = tid, fel och
+  bildantal för den senaste körningen. `/api/health` har `lasning_ok` och `senaste_forsok`.
+* **Home Assistant**: nivån behåller sitt värde (entiteten blir inte unknown av en missad
+  körning), `binary_sensor.vatten_kamera_lasning_ok` följer `lasning_ok` (den sensorn finns
+  just för att visa en miss), och alla entiteter får attributen `senaste_forsoket_ok`,
+  `senaste_forsoket_tid` och `senaste_forsoket_fel`.
+* **Gränssnittet** visar värdet som vanligt och en rad under det: "Senaste försöket (06:35)
+  gav inget värde: … — värdet ovan är det senaste som gick att läsa, och tjänsten fortsätter
+  läsa." `–` visas bara när inget värde någonsin lästs.
+* **`PUBLISH_TO=av` fungerade inte**: `_publish_target` i `config.py` kände inte igen `av` och
+  gjorde om det till `auto`. Varje körning försökte därför MQTT och skrev en felrad i loggen
+  ("varken MQTT … eller Home Assistant … svarar") trots att ingen publicering var önskad.
+* Nya tester: värdet står kvar vid en miss, ett nytt värde byter ut det gamla, health skiljer
+  på värde och försök, och binärsensorn måste läsa `lasning_ok` (läst som syntaxträd, så en
+  kommentar inte kan lura testet). **222 tester gröna.**
+
 ## 0.27.0 — 2026-09-27
 
 **En avbruten körning publicerar inget värde — och att bara öppna panelen stör inte läsningen.**

@@ -9,6 +9,7 @@ Kor:  .venv/Scripts/python.exe -m pytest tests -q
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -496,3 +497,124 @@ def test_korningen_slapper_kameran_nar_granssnittet_ber_om_det(
     # Slingan slutade nar flaggan sattes i stallet for att mala hela fonstret.
     assert kamera.tagna < 20, f"korningen tog {kamera.tagna} bilder trots avbrottet"
     pipeline._AVBRYT.clear()  # noqa: SLF001 - stadar efter testet
+
+
+# --- En missad korning far inte slacka vardet ---------------------------------
+
+
+def korning(
+    *, value: str | None, numeric: float | None, finished: str, error: str = ""
+) -> pipeline.RunSummary:
+    """En korning att skriva till latest.json."""
+    return pipeline.RunSummary(
+        version="0.28.0",
+        started=finished,
+        finished=finished,
+        frames_taken=38,
+        frames_readable=38,
+        value=value,
+        numeric=numeric,
+        votes=10 if value else 0,
+        confidence=0.6 if value else 0.0,
+        lamp_used=False,
+        error=error,
+    )
+
+
+def las_status(fil: Path) -> dict:
+    return json.loads(fil.read_text(encoding="utf-8"))
+
+
+def test_missad_korning_slacker_inte_vardet(tmp_path: Path) -> None:
+    """En korning som missar far inte gora vardet tomt i granssnittet eller HA.
+
+    Uppmatt 2026-09-29 06:35: en enda korning gav "for fa eniga lasningar" och
+    da skrevs latest.json med value=null. Vardet blev "-" i granssnittet och
+    sensor.vatten_kamera_niva blev unknown i Home Assistant - trots att tjansten
+    matte bra (129 av 131 korningar det dygnet). Vardet ska sta kvar, och den
+    missade korningen ska synas i senaste_forsok i stallet.
+    """
+    fil = tmp_path / "latest.json"
+    pipeline.write_status(
+        korning(value="052", numeric=0.52, finished="2026-09-29T06:24:12"),
+        decimals=2,
+        path=fil,
+    )
+
+    pipeline.write_status(
+        korning(
+            value=None,
+            numeric=None,
+            finished="2026-09-29T06:35:12",
+            error="for fa eniga lasningar (basta varde 0.42 mot kravet 0.35)",
+        ),
+        decimals=2,
+        path=fil,
+    )
+
+    data = las_status(fil)
+    assert data["value"] == "052", "vardet slocknade nar en korning missade"
+    assert data["numeric"] == 0.52
+    assert data["display"] == "0.52"
+    assert data["read_at"] == "2026-09-29T06:24:12", "tiden ska hora till vardet"
+    assert data["ok"] is True
+    assert data["lasning_ok"] is False, "senaste forsoket ska synas"
+    assert data["senaste_forsok"]["ok"] is False
+    assert data["senaste_forsok"]["read_at"] == "2026-09-29T06:35:12"
+    assert "eniga" in data["senaste_forsok"]["error"]
+    assert data["error"] == "", "felet hor till forsoket, inte till vardet"
+
+
+def test_nytt_varde_byter_ut_det_gamla(tmp_path: Path) -> None:
+    """Bara ett nytt varde far byta ut det gamla."""
+    fil = tmp_path / "latest.json"
+    pipeline.write_status(
+        korning(value="052", numeric=0.52, finished="2026-09-29T06:24:12"),
+        decimals=2,
+        path=fil,
+    )
+
+    pipeline.write_status(
+        korning(value="051", numeric=0.51, finished="2026-09-29T06:45:12"),
+        decimals=2,
+        path=fil,
+    )
+
+    data = las_status(fil)
+    assert data["value"] == "051"
+    assert data["read_at"] == "2026-09-29T06:45:12"
+    assert data["lasning_ok"] is True
+    assert data["senaste_forsok"]["ok"] is True
+
+
+def test_missad_forsta_korning_ger_inget_varde(tmp_path: Path) -> None:
+    """Utan ett tidigare varde finns inget att visa - da ar vardet tomt."""
+    fil = tmp_path / "latest.json"
+    pipeline.write_status(
+        korning(
+            value=None,
+            numeric=None,
+            finished="2026-09-29T06:35:12",
+            error="for fa eniga lasningar",
+        ),
+        path=fil,
+    )
+
+    data = las_status(fil)
+    assert data["value"] is None
+    assert data["ok"] is False
+    assert data["lasning_ok"] is False
+    assert "eniga" in data["error"], "utan varde maste felet star har"
+
+
+def test_statusen_sager_vilket_som_ar_vardet_och_vilket_som_ar_forsoket() -> None:
+    """Nycklarna maste finnas aven nar korningen gick bra."""
+    status = korning(value="052", numeric=0.52, finished="2026-09-29T06:24:12").to_status(
+        unit="l", decimals=2
+    )
+
+    assert status["ok"] is True
+    assert status["lasning_ok"] is True
+    assert status["senaste_forsok"]["ok"] is True
+    assert status["senaste_forsok"]["read_at"] == "2026-09-29T06:24:12"
+    assert status["display"] == "0.52"

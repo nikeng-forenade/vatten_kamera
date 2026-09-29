@@ -95,10 +95,15 @@ class RunSummary:
         Det ar vad vardestjansten svarar pa /api/latest, och vad Home
         Assistant-lasen laser. Halls liten och sjalvstaendig, sa att den som
         bara vill visa vardet slipper kanna till resten av korningen.
+
+        `ok` betyder "finns ett varde att visa", och `lasning_ok` att just den
+        HAR korningen gav ett varde. De skiljer sig nar en korning missar men
+        ett aldre varde star kvar (se `write_status`).
         """
+        varde = self.value is not None
         return {
             "version": self.version,
-            "ok": self.value is not None,
+            "ok": varde,
             "value": self.value,
             "numeric": self.numeric,
             "display": f"{self.numeric:.{decimals}f}" if self.numeric is not None else None,
@@ -116,6 +121,19 @@ class RunSummary:
             "bilder_i": self.frames_dir,
             "published_to": self.published_to,
             "error": self.error,
+            # Gav den har korningen ett varde? Skiljer sig fran `ok` forst nar
+            # korningen missade men ett aldre varde star kvar.
+            "lasning_ok": varde,
+            # Den senaste korningen - aven nar den missade. Det ar har den som
+            # undrar varfor vardet ar gammalt hittar forklaringen.
+            "senaste_forsok": {
+                "ok": varde,
+                "read_at": self.finished,
+                "read_at_iso": _local_iso(self.finished),
+                "error": self.error,
+                "frames": self.frames_taken,
+                "bilder_i": self.frames_dir,
+            },
             # Flodet just nu, och enheten for det (kan skilja sig fran nivan).
             "flow": self.flow,
             "flow_numeric": self.flow_numeric,
@@ -149,6 +167,40 @@ def _local_iso(text: str) -> str | None:
     return moment.isoformat(timespec="seconds")
 
 
+# Falten som hor till sjalva VARDET. De star kvar nar en korning missar, sa
+# att granssnittet och Home Assistant fortsatter visa det senaste vardet.
+VARDE_FALT = (
+    "value",
+    "numeric",
+    "display",
+    "decimals",
+    "unit",
+    "confidence",
+    "votes",
+    "frames",
+    "read_at",
+    "read_at_iso",
+    "bild",
+    "bilder_i",
+    "published_to",
+    "flow",
+    "flow_numeric",
+    "flow_confidence",
+    "flow_votes",
+    "flow_unit",
+    "flow_note",
+)
+
+
+def _las_status(path: Path) -> dict:
+    """latest.json som den ar - eller tomt om den inte gar att lasa."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def write_status(
     summary: RunSummary,
     *,
@@ -161,16 +213,31 @@ def write_status(
 
     Skrivs till en temp-fil och byts ut, sa att en lasning som kommer mitt i
     aldrig ser en halvfardig fil.
+
+    En korning som **inte** fick nagot varde slacker inte vardet som redan star
+    dar. Missar en enda korning (dålig bild, siffran satt snett, en toning just
+    i det oogonblicket) skulle vardet annars bli tomt i granssnittet och i Home
+    Assistant - det ser ut som att allt ar dott trots att tjansten mater bra.
+    I stallet star det senaste vardet kvar och den missade korningen beskrivs i
+    `senaste_forsok`, medan `lasning_ok` sager att just den korningen missade.
+    Bara ett nytt varde byter ut det gamla.
     """
+    ny = summary.to_status(unit=unit, decimals=decimals, flow_unit=flow_unit)
+    if summary.value is None:
+        gammal = _las_status(path)
+        if gammal.get("value") is not None:
+            for falt in VARDE_FALT:
+                if falt in gammal:
+                    ny[falt] = gammal[falt]
+            # Vardet som visas ar giltigt aven om forsoket missade, sa `error`
+            # hor till senaste_forsok och inte till vardet.
+            ny["ok"] = True
+            ny["error"] = ""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(
-            json.dumps(
-                summary.to_status(unit=unit, decimals=decimals, flow_unit=flow_unit),
-                indent=2,
-                ensure_ascii=False,
-            ),
+            json.dumps(ny, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
         os.replace(tmp, path)
@@ -790,8 +857,8 @@ class NightlyRunner:
             )
 
             # Senaste lasningen pa disk, for vardestjansten och Home Assistant.
-            # Skrivs aven nar lasningen misslyckades, sa att HA ser att nagot ar
-            # fel i stallet for att visa ett gammalt varde.
+            # Missade korningen vardet star det forra vardet kvar (se
+            # write_status) - den har korningen syns i senaste_forsok i stallet.
             status = summary.to_status(
                 unit=self.cfg.mqtt.unit,
                 decimals=self.cfg.reader.decimals,
@@ -803,7 +870,9 @@ class NightlyRunner:
                 decimals=self.cfg.reader.decimals,
                 flow_unit=self.cfg.run.flow_unit,
             )
-            # ... och i historiken, som granssnittets graf ritas ur.
+            # ... och i historiken, som granssnittets graf ritas ur. Har skrivs
+            # korningen som den blev - en missad korning blir en missad punkt i
+            # grafen, aven om senaste vardet star kvar i latest.json.
             history.append(status)
 
             if run_dir is not None:

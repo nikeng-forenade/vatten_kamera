@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.27.0"
+VERSION = "0.28.0"
 
 ROOT = Path(__file__).resolve().parent
 
@@ -349,9 +349,12 @@ def _publish_target(raw: str) -> str:
     """Laser PUBLISH_TO ur .env. Ett okant varde blir 'auto'.
 
     'auto' ar standard: MQTT om brokern svarar, annars Home Assistants eget API.
+    'av' betyder att inget publiceras - HACS-integrationen laser latest.json.
+    Gloms 'av' bort har blir det 'auto', och da forsoker varje korning MQTT och
+    skriver en felrad i loggen aven om ingen broker finns.
     """
     value = (raw or "auto").strip().lower()
-    return value if value in {"auto", "mqtt", "rest", "bada"} else "auto"
+    return value if value in {"auto", "mqtt", "rest", "bada", "av"} else "auto"
 
 
 def _read_mode(raw: str) -> str:

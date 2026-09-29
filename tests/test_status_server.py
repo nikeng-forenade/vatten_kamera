@@ -109,6 +109,39 @@ def test_latest_ger_vardet_och_en_bildadress(server: StatusServer) -> None:
     assert data["votes"] == 17
 
 
+def test_health_skiljer_senaste_forsoket_fran_vardet(server: StatusServer) -> None:
+    """Vardet kan vara ett aldre, giltigt varde - health sager om senaste forsoket.
+
+    Granssnittet och Home Assistant visar vardet aven nar en korning missar
+    (tjansten behaller det senaste). Utan den har raden gar det inte att se att
+    korningen missade, och da ser allt ut att vara bra.
+    """
+    status, data = hamta(server, "/api/health")
+
+    assert status == 200
+    assert data["lasning_ok"] is True
+
+
+
+def test_health_sager_att_senaste_forsoket_missade(server: StatusServer) -> None:
+    """En missad korning ska synas i health aven om vardet star kvar."""
+    fil = status_server.LATEST_FILE
+    data = json.loads(fil.read_text(encoding="utf-8"))
+    data["lasning_ok"] = False
+    data["senaste_forsok"] = {
+        "ok": False,
+        "read_at": "2026-09-29T06:35:12",
+        "error": "for fa eniga lasningar",
+    }
+    fil.write_text(json.dumps(data), encoding="utf-8")
+
+    status, health = hamta(server, "/api/health")
+
+    assert status == 200
+    assert health["lasning_ok"] is False
+    assert health["senaste_forsok"]["read_at"] == "2026-09-29T06:35:12"
+
+
 def test_bilden_serveras_men_inte_filer_utanfor(server: StatusServer) -> None:
     bild = status_server.CAPTURES_DIR / "runs" / "bild.jpg"
     bild.parent.mkdir(parents=True, exist_ok=True)

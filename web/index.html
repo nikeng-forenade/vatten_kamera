@@ -135,6 +135,7 @@
     <div>
       <div class="value" id="value">–</div>
       <div class="meta" id="valueMeta">ingen läsning än</div>
+      <p class="hint warn" id="valueVarning" hidden></p>
     </div>
     <img id="bild" hidden alt="Bilden avläsaren valde">
   </div>
@@ -310,6 +311,13 @@ async function refreshStatus() {
   const health = await api('/api/health');
   const latest = await api('/api/latest');
 
+  // Den senaste korningen - aven en som missade vardet. En missad korning tar
+  // inte bort vardet (tjansten behaller det senaste), sa det maste synas att
+  // vardet ar det senaste som gick att lasa och inte dagens.
+  const forsok = latest.senaste_forsok || {};
+  const missat = forsok.ok === false;
+  const forsokTid = (forsok.read_at || '').replace('T', ' ');
+
   $('pulse').className = 'dot ' + (health.ok && !health.kor ? 'on' : health.ok ? 'on' : 'off');
   $('ver').textContent = `v${health.version || '?'} · ${health.host || ''}`;
   $('live').textContent = health.kor
@@ -326,8 +334,12 @@ async function refreshStatus() {
     service.push('nästa läsning: strax');
   }
   if (health.kor) service.push(`läser just nu (startade ${health.startad || ''})`);
-  if (latest.ok) service.push(`senaste värdet: ${latest.display} (${ago(health.aldsta_lasning_s)} sedan)`);
-  else service.push(`senaste läsningen: ${latest.error || 'misslyckades'}`);
+  if (latest.ok) {
+    service.push(`senaste värdet: ${latest.display} (${ago(health.aldsta_lasning_s)} sedan)`);
+    if (missat) service.push(`senaste försöket (${forsokTid}) gav inget värde`);
+  } else {
+    service.push(`senaste läsningen: ${latest.error || 'misslyckades'}`);
+  }
   $('state-service').textContent = service.join(' · ');
 
   // En rad om hur den jobbar - inte mer.
@@ -360,10 +372,18 @@ async function refreshStatus() {
     } else if (latest.flow_note) {
       $('valueMeta').innerHTML += ` · flöde: <i>${latest.flow_note}</i>`;
     }
+    $('valueVarning').hidden = !missat;
+    if (missat) {
+      $('valueVarning').innerHTML =
+        `Senaste försöket (${forsokTid}) gav inget värde` +
+        (forsok.error ? `: <i>${forsok.error}</i>` : '') +
+        ' — värdet ovan är det senaste som gick att läsa, och tjänsten fortsätter läsa.';
+    }
   } else {
     $('value').textContent = '–';
     $('value').className = 'value stale';
     $('valueMeta').textContent = latest.error || 'ingen läsning än';
+    $('valueVarning').hidden = true;
   }
 
   if (latest.bild_url) {

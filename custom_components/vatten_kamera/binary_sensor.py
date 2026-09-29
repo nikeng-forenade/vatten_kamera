@@ -42,10 +42,18 @@ class LasningOkSensor(VattenKameraEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
+        """Gav den senaste korningen ett varde?
+
+        Inte `reading.ok` - vardet kan vara ett aldre, giltigt varde som star
+        kvar efter en missad korning. Det ar just den missen den har sensorn
+        finns for att visa.
+        """
         reading = self.coordinator.reading
         if reading is None:
             return None
-        return reading.ok
+        if reading.lasning_ok is None:
+            return reading.ok
+        return reading.lasning_ok
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

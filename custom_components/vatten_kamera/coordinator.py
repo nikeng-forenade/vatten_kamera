@@ -46,7 +46,12 @@ def as_datetime(text: Any) -> datetime | None:
 
 @dataclass(frozen=True)
 class Reading:
-    """En lasning ur vardetjansten, med tolkade falt."""
+    """En lasning ur vardetjansten, med tolkade falt.
+
+    `ok` betyder att ett varde finns att visa - tjansten slacker inte det
+    senaste vardet nar en korning missar. `lasning_ok` sager om just den senaste
+    korningen gav ett varde, och `forsok_error` varfor den inte gjorde det.
+    """
 
     ok: bool
     value: str | None
@@ -68,10 +73,20 @@ class Reading:
     flow_numeric: float | None = None
     flow_unit: str = ""
     flow_note: str = ""
+    # Gav den senaste korningen ett varde? None nar tjansten inte sager det.
+    lasning_ok: bool | None = None
+    # Den senaste korningen (aven en som missade vardet).
+    forsok_read_at: datetime | None = None
+    forsok_error: str = ""
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any], image_url: str | None) -> "Reading":
         """Bygger en lasning av svaret fran /api/latest."""
+        forsok = payload.get("senaste_forsok")
+        if not isinstance(forsok, dict):
+            forsok = {}
+        # En aldre tjanst har inte `lasning_ok` - da galler `ok`.
+        senaste_ok = payload.get("lasning_ok", payload.get("ok"))
         return cls(
             ok=bool(payload.get("ok")),
             value=payload.get("value"),
@@ -91,6 +106,9 @@ class Reading:
             flow_numeric=_as_float(payload.get("flow_numeric")),
             flow_unit=str(payload.get("flow_unit") or ""),
             flow_note=str(payload.get("flow_note") or ""),
+            lasning_ok=None if senaste_ok is None else bool(senaste_ok),
+            forsok_read_at=as_datetime(forsok.get("read_at_iso") or forsok.get("read_at")),
+            forsok_error=str(forsok.get("error") or ""),
         )
 
 

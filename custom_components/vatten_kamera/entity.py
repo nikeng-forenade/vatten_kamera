@@ -45,6 +45,14 @@ class VattenKameraEntity(CoordinatorEntity[VattenKameraCoordinator]):
             extra["bild"] = reading.image_url
         if reading.error:
             extra["fel"] = reading.error
+        # En missad korning tar inte bort vardet - den syns har i stallet, sa
+        # att ett gammalt varde gar att skilja fran ett farskt.
+        if reading.lasning_ok is not None:
+            extra["senaste_forsoket_ok"] = reading.lasning_ok
+        if reading.forsok_read_at:
+            extra["senaste_forsoket_tid"] = reading.forsok_read_at.isoformat(timespec="seconds")
+        if reading.forsok_error:
+            extra["senaste_forsoket_fel"] = reading.forsok_error
         health = self.coordinator.health
         if health:
             extra["lage"] = health.get("lage")

@@ -48,7 +48,10 @@ class NivaSensor(VattenKameraEntity, SensorEntity):
     def native_value(self) -> float | None:
         reading = self.coordinator.reading
         if reading is None or not reading.ok:
-            # Ingen giltig lasning: visa inget varde i stallet for ett gammalt.
+            # Inget varde alls an (ingen lasning har lyckats): visa inget.
+            # En enstaka missad korning tar inte bort vardet - da star det
+            # senaste vardet kvar och `senaste_forsoket_ok` sager att den
+            # senaste korningen missade.
             return None
         return reading.numeric
 

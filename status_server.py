@@ -1087,6 +1087,11 @@ def _handler_factory(*, allow_read: bool, allow_restart: bool) -> type[BaseHTTPR
                 # Finns kalibreringen? Utan den kan tjansten inte lasa, och da
                 # visar granssnittet en forklaring i stallet for tystnad.
                 "kalibrering": cfg.calibration_file.exists(),
+                # Gav den senaste korningen ett varde? Vardet i latest.json kan
+                # vara ett aldre, giltigt varde (en missad korning slacker det
+                # inte) - den har raden sager om det senaste forsoket gick bra.
+                "lasning_ok": bool(latest.get("lasning_ok", latest.get("ok"))),
+                "senaste_forsok": latest.get("senaste_forsok") or {},
                 # Flodet just nu, och om det legat kvar sa lange att det ser ut
                 # som ett lackage (eller en oppen ventil).
                 "flode": latest.get("flow_numeric"),
