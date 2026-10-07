@@ -169,6 +169,11 @@ Det här är den enskilt viktigaste faktorn för att läsningen ska bli pålitli
 Kalibreringen talar om var i bilden siffrorna sitter. Den behöver göras om när kameran
 flyttats — även några centimeter märks, för då flyttar mätfönstren.
 
+I webbgränssnittets kalibreringspanel tar **Ny bild** flera bilder men visar den skarpaste
+enskilda bilden, så att olika displaylägen inte blandas ihop visuellt. Rutorna provas ändå
+mot hela bildserien. Vyn zoomar in på området kring displayen; kamerans zoom ändras inte.
+Bevisbilden bredvid senaste värdet går att klicka på för att öppna i full storlek.
+
 1. **Titta på ett utsnitt:**
 
    ```powershell

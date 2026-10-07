@@ -242,6 +242,14 @@ FIELDS: tuple[Field, ...] = (
         help="av = bara senaste.json (HACS-integrationen laser den)",
     ),
     # --- MQTT ------------------------------------------------------------
+    _field(
+        "MQTT_ENABLED",
+        "Anvand MQTT",
+        "MQTT",
+        kind="bool",
+        default="true",
+        help="Av = MQTT anvands inte alls, oavsett Var vardet publiceras",
+    ),
     _field("MQTT_HOST", "Broker", "MQTT"),
     _field("MQTT_PORT", "Port", "MQTT", kind="int", minimum=1, maximum=65535),
     _field("MQTT_USER", "Anvandare", "MQTT"),

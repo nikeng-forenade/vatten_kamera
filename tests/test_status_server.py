@@ -474,7 +474,7 @@ def kalibreringen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings_store, "ENV_FILE", tmp_path / ".env")
     monkeypatch.setattr(status_server, "_ta_bilder", lambda *a, **kw: syntetiska_bilder()[0])
     monkeypatch.setattr(
-        status_server, "_BILD", {"stack": None, "frames": [], "jpeg": None, "tagen": None}
+        status_server, "_BILD", {"preview": None, "frames": [], "jpeg": None, "tagen": None}
     )
     return fil
 
@@ -497,6 +497,18 @@ def test_kalibreringsvyn_visar_bilden_och_rutorna(server: StatusServer, kalibrer
     assert status == 200
     assert isinstance(bild, bytes)
     assert bild[:2] == b"\xff\xd8", "bilden ska vara en JPEG"
+    assert "skarpaste" in data["text"]
+
+
+def test_kalibreringsbilden_valjer_en_skarp_enstaka_bild() -> None:
+    import cv2
+    import numpy as np
+
+    sharp = np.zeros((100, 100, 3), dtype=np.uint8)
+    cv2.rectangle(sharp, (20, 20), (80, 80), (255, 255, 255), thickness=4)
+    blurred = cv2.GaussianBlur(sharp, (15, 15), 0)
+
+    assert status_server._skarpaste_bild([blurred, sharp]) is sharp
 
 
 def test_kalibreringen_sparas_i_verktygens_format(server: StatusServer, kalibreringen: Path) -> None:

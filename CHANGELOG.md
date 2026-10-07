@@ -13,6 +13,28 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.28.1 — 2026-10-07
+
+**Kalibreringsvyn visar en skarp bild — och MQTT går att stänga av i gränssnittet.**
+
+* **Kalibreringsbilden var en tidstack**: "Ny bild" lade de åtta bilderna ovanpå varandra (den
+  ljusaste pixeln av varje) och visade resultatet. Alla displayens sidor syntes då samtidigt,
+  vilket gjorde att en siffra kunde se dubbeltecknad eller utdragen ut — även när kameran
+  lämnade ifrån sig en skarp bild. Vyn visar nu **den skarpaste enskilda bilden**
+  (Laplacian-varians), medan rutorna fortfarande provas mot hela serien. Raden under bilden
+  säger hur många bilder den valdes ur.
+* **Bevisbilden är större och klickbar**: bilden bredvid värdet visas i upp till 260 px höjd och
+  går att klicka på för att öppna i full storlek.
+* **MQTT gick inte att stänga av i gränssnittet**: `MQTT_ENABLED` lästes av `config.py` men
+  saknades bland gränssnittets fält, så den gick bara att ändra i `.env`. Fältet finns nu under
+  **MQTT** och styr både publiceringen och "Testa MQTT".
+
+**Driftnot 2026-10-07** (inställningar, inte kod): efter saltpåfyllningen slutade läsningen ge
+värden — rutnätet mättes om (`92x96` px mot tidigare `95x100`) och läsprofilen sattes till
+`gain=8, slutare=1/25`. Slutaren var det avgörande: **1/100 s gav synligt flimmer** (flicker
+52,8 i mätningen) eftersom den bara fångar en halv 50 Hz-cykel, medan 1/25 s ger 0,2. Med
+1/100 blev konfidensen 0,06 — med 1/25 blev den 0,77, och en riktig körning gav `1.32`.
+
 ## 0.28.0 — 2026-09-29
 
 **En missad läsning släcker inte värdet — varken i gränssnittet eller i Home Assistant.**

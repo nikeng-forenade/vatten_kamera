@@ -28,7 +28,9 @@
   .value.stale { color: var(--dim); }
   .meta { color: var(--dim); font-size: .85rem; }
   .meta b { color: var(--text); font-weight: 500; }
-  #bild { max-height: 170px; border-radius: 8px; border: 1px solid var(--line); margin-left: auto; }
+  #bildLank { display: block; max-width: 420px; margin-left: auto; line-height: 0; }
+  #bild { display: block; max-height: 260px; max-width: 100%; border-radius: 8px;
+          border: 1px solid var(--line); cursor: zoom-in; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 16px; }
   .card h3 { font-size: .95rem; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
   .card .state { font-size: .82rem; color: var(--dim); min-height: 2.6em; }
@@ -137,7 +139,9 @@
       <div class="meta" id="valueMeta">ingen läsning än</div>
       <p class="hint warn" id="valueVarning" hidden></p>
     </div>
-    <img id="bild" hidden alt="Bilden avläsaren valde">
+    <a id="bildLank" hidden target="_blank" rel="noopener" title="Öppna bevisbilden i full storlek">
+      <img id="bild" hidden alt="Bevisbild från senaste avläsningen – klicka för full storlek">
+    </a>
   </div>
 
   <details class="panel" id="panelGraf">
@@ -387,9 +391,12 @@ async function refreshStatus() {
   }
 
   if (latest.bild_url) {
+    $('bildLank').href = latest.bild_url;
+    $('bildLank').hidden = false;
     $('bild').src = latest.bild_url;
     $('bild').hidden = false;
   } else {
+    $('bildLank').hidden = true;
     $('bild').hidden = true;
   }
 

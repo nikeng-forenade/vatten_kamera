@@ -415,9 +415,9 @@ def camera_action(action: str, values: dict[str, str] | None = None) -> dict[str
 # maskin och kopiera over en fil.
 # ---------------------------------------------------------------------------
 
-# Hur manga bilder "Ny bild" och "Mat automatiskt" tar. Fler bilder ger en
-# stadigare tidsstack (alla fyra siffrorna syns da pa en gang) men tar langre
-# tid: 8 bilder med 1.2 s mellanrum ar ett tiotal sekunder.
+# Hur manga bilder "Ny bild" och "Mat automatiskt" tar. Lasningen provar alla
+# bilder, men vyn visar den skarpaste enskilda bilden sa att siffrorna inte
+# dubbelexponeras. 8 bilder med 1.2 s mellanrum ar ett tiotal sekunder.
 KALIBRERINGS_BILDER = 8
 KALIBRERINGS_INTERVALL_S = 1.2
 
@@ -432,7 +432,7 @@ VY_MARGINAL = 150
 
 # Den senaste bilden. "Spara" visar da vad de nya rutorna laser i exakt samma
 # bild som man drog i, och sidan behover inte ta nya bilder varje gang.
-_BILD: dict[str, Any] = {"stack": None, "frames": [], "jpeg": None, "tagen": None}
+_BILD: dict[str, Any] = {"preview": None, "frames": [], "jpeg": None, "tagen": None}
 _BILD_LAS = threading.Lock()
 
 
@@ -514,16 +514,15 @@ def _ta_bilder(
     return bilder
 
 
-def _tidsstack(frames: list[Any]) -> Any:
-    """En bild dar ALLA sidor syns: den ljusaste pixeln av varje.
+def _skarpaste_bild(frames: list[Any]) -> Any:
+    """Valjer den skarpaste enskilda bilden utan att blanda displayens sidor."""
+    import cv2
 
-    Displayen visar en sida i taget, och pa vardesidan ar forsta positionen
-    slackt. Genom att lagga bilderna ovanpa varandra syns en siffra i varje
-    position, och da gar det att se om en ruta sitter ratt.
-    """
-    import numpy as np
+    def skarpa(image: Any) -> float:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
-    return np.max(np.stack(frames), axis=0)
+    return max(frames, key=skarpa)
 
 
 def vy_runt(
@@ -624,12 +623,12 @@ def las_med_rutorna(frames: list[Any], cal: Any) -> dict[str, Any]:
     }
 
 
-def _koda_bild(stack: Any) -> bytes | None:
-    """Gor om tidsstacken till en JPEG som sidan kan visa."""
+def _koda_bild(image: Any) -> bytes | None:
+    """Gor om kamerabilden till en hogkvalitativ JPEG som sidan kan visa."""
     try:
         import cv2
 
-        ok, kodad = cv2.imencode(".jpg", stack, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
+        ok, kodad = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
         return kodad.tobytes() if ok else None
     except Exception as exc:  # noqa: BLE001
         log.warning("kunde inte koda kalibreringsbilden: %s", exc)
@@ -639,10 +638,10 @@ def _koda_bild(stack: Any) -> bytes | None:
 def _spara_bilden(frames: list[Any]) -> None:
     """Kommer ihag de sista bilderna, sa att 'Spara' kan visa dem igen."""
     with _BILD_LAS:
-        stack = _tidsstack(frames)
+        preview = _skarpaste_bild(frames)
         _BILD["frames"] = frames
-        _BILD["stack"] = stack
-        _BILD["jpeg"] = _koda_bild(stack)
+        _BILD["preview"] = preview
+        _BILD["jpeg"] = _koda_bild(preview)
         _BILD["tagen"] = time.time()
 
 
@@ -675,7 +674,7 @@ def kalibreringsvy(*, ta_nya: bool = False) -> dict[str, Any]:
             }
         _spara_bilden(_ta_bilder())
     cal, fel = _las_kalibrering()
-    hojd, bredd = _BILD["stack"].shape[:2]
+    hojd, bredd = _BILD["preview"].shape[:2]
     roi = tuple(cal.roi) if cal.valid else (0, 0, bredd, hojd)
     tagen = float(_BILD["tagen"] or time.time())
 
@@ -692,7 +691,7 @@ def kalibreringsvy(*, ta_nya: bool = False) -> dict[str, Any]:
         "bild_url": f"/api/calibration/bild?t={int(tagen)}" if _BILD["jpeg"] else "",
         "lasning": las_med_rutorna(_BILD["frames"], cal),
         "text": f"bild tagen {datetime.fromtimestamp(tagen).strftime('%H:%M:%S')}"
-        f" ({len(_BILD['frames'])} bilder)",
+        f" (visar skarpaste av {len(_BILD['frames'])} bilder)",
     }
 
 
