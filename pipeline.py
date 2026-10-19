@@ -42,6 +42,7 @@ from display_reader import (
     crop_roi,
     group_similar,
     image_from_crop,
+    measure_cells,
     read_image,
     typical_crops,
 )
@@ -53,6 +54,21 @@ from status_server import set_state
 log = logging.getLogger(__name__)
 
 RUNS_DIR = CAPTURES_DIR / "runs"
+
+# --- Autokalibrering ---------------------------------------------------------
+#
+# Kameran kan rubbas nagra pixlar - t.ex. nar saltbehallaren fylls - och da
+# pekar cellrutorna utanfor siffrorna. En sadan korning far inget varde: 02:00
+# lases som 02:90 och vardesidans siffror tappar konfidens. I stallet for att
+# vanta pa en manuell omkalibrering mats rutnatet om ur korningens egna bilder.
+
+# Hur manga av korningens sidor som mats om. Fler behovs inte - varje sida ger
+# en matning per sifferposition - och varje bild kostar en stund att tolka.
+AUTO_CALIBRATION_MAX_IMAGES = 24
+
+# Mindre forskjutning an sa ar bara matbrus. Da lases det gamla rutnatet kvar,
+# sa att en lyckad korning inte byter kalibrering i tid och otid.
+AUTO_CALIBRATION_MIN_DRIFT_PX = 2.0
 
 
 @dataclass
@@ -85,6 +101,8 @@ class RunSummary:
     flow_votes: int = 0
     # Varför flodet saknas, när det inte gick att läsa.
     flow_note: str = ""
+    # Satt nar rutnatet mottes om automatiskt under korningen (se AUTO_CALIBRATE).
+    calibration_note: str = ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, ensure_ascii=False)
@@ -121,6 +139,8 @@ class RunSummary:
             "bilder_i": self.frames_dir,
             "published_to": self.published_to,
             "error": self.error,
+            # Satt nar rutnatet mottes om automatiskt under korningen.
+            "kalibrering": self.calibration_note,
             # Gav den har korningen ett varde? Skiljer sig fran `ok` forst nar
             # korningen missade men ett aldre varde star kvar.
             "lasning_ok": varde,
@@ -257,6 +277,18 @@ def _ladda_kalibrering(fil: Path) -> Calibration | None:
         return Calibration.load(fil)
     except ReaderError:
         return None
+
+
+def _rutnat_drift(
+    gammalt: list[tuple[int, int, int, int]], nytt: list[tuple[int, int, int, int]]
+) -> float:
+    """Hur mycket sifferrutorna har flyttat sig, i bildpixlar."""
+    if not gammalt or len(gammalt) != len(nytt):
+        return float("inf")
+    return max(
+        max(abs(gammal - ny) for gammal, ny in zip(gammal_ruta, ny_ruta))
+        for gammal_ruta, ny_ruta in zip(gammalt, nytt)
+    )
 
 
 class NightlyRunner:
@@ -453,7 +485,12 @@ class NightlyRunner:
         duration_s: float,
         frames_dir: Path | None,
         stop_when_ready: bool = True,
-    ) -> tuple[list[Reading], list[tuple[Reading, Path]], list[tuple[Reading, bytes]]]:
+    ) -> tuple[
+        list[Reading],
+        list[tuple[Reading, Path]],
+        list[tuple[Reading, bytes]],
+        list[tuple[np.ndarray, int, bytes | None]],
+    ]:
         """Tar bilder under `duration_s`, vager samman lika bilder och tolkar dem.
 
         Displayen flimrar: nagra bilder tas mitt i en uppdatering och har svagare
@@ -461,9 +498,11 @@ class NightlyRunner:
         samma sida och tolkar den typiska bilden (medianen pixel for pixel).
         Medianen vags inte ner av de svaga bilderna, sa siffrorna star kvar.
 
-        Returnerar (lasningar, sparade filer, bilder i minnet). Den sista listan
-        ar de sidor som gick att lasa - ur den skrivs bevisbilden nar
-        SAVE_FRAMES ar av.
+        Returnerar (lasningar, sparade filer, bilder i minnet, gruppbilder).
+        Den tredje listan ar de sidor som gick att lasa - ur den skrivs
+        bevisbilden nar SAVE_FRAMES ar av. Den fjarde ar en representativ bild
+        per sida (bild, antal bilder bakom, JPEG) och anvands for att kunna mata
+        om rutnatet utan att kameran behovs igen.
         """
         cfg = self.cfg.run
         reader_cfg = self.cfg.reader
@@ -554,7 +593,7 @@ class NightlyRunner:
             time.sleep(max(0.0, cfg.interval_s - (time.time() - frame_started)))
 
         if not crops:
-            return [], [], []
+            return [], [], [], []
 
         groups = group_similar(crops, self.similarity_threshold)
         log.info("%d bilder i %d grupper (samma sida slas ihop till en typisk bild)",
@@ -566,11 +605,16 @@ class NightlyRunner:
         # bevisbilden for det varde som till slut publiceras - en bild i stallet
         # for en per lasbar sida. Da blir ett dygn nagra tiotals MB, inte hundra.
         kandidater: list[tuple[Reading, bytes]] = []
+        # En representativ bild per sida, for autokalibreringen. Den byggs ur
+        # korningens egna utsnitt, sa att rutnatet kan matas om aven efter att
+        # kameran lamnats tillbaka.
+        gruppbilder: list[tuple[np.ndarray, int, bytes | None]] = []
 
         for group_number, indices in enumerate(groups, start=1):
             typical = typical_crops(crops, indices)
+            bild = image_from_crop(typical, self.calibration.roi)
             reading = read_image(
-                image_from_crop(typical, self.calibration.roi),
+                bild,
                 self.calibration,
                 reader_cfg,
                 timestamp=float(len(indices)),
@@ -590,6 +634,7 @@ class NightlyRunner:
 
             middle = indices[len(indices) // 2]
             payload = jpegs[middle]
+            gruppbilder.append((bild, len(indices), payload))
 
             if frames_dir is not None and cfg.save_frames:
                 # Hela serien sparas: aven sidor utan varde (om inte
@@ -609,7 +654,153 @@ class NightlyRunner:
         # Spara ett forslag per lasbar sida i minnet. Vilken som blir beviset
         # avgor rostningen i run_once - det ar ju vardet som publiceras som ska
         # kunna kontrolleras, inte den sida som rakar ha hogst konfidens.
-        return readings, saved, kandidater
+        return readings, saved, kandidater, gruppbilder
+
+    def _tolka(
+        self, readings: list[Reading], *, avbruten: bool = False
+    ) -> tuple[list[Reading], list[Reading], str, str, Consensus, Consensus]:
+        """Rostar fram vardet och flodet ur korningens lasningar.
+
+        Returnerar (vardesida, flodessida, anteckning, flodesanteckning, varde,
+        flode). Sidvarvet ar klockan -> 02:00 -> VARDET -> flodet, och bada
+        vardesidorna ser likadana ut for avlasaren - bara ordningen skiljer dem
+        at. Darfor rostas bara sidorna som foljer pa spolttiden.
+        """
+        cfg = self.cfg.run
+        decimals = self.cfg.reader.decimals
+        far_publicera_varde, avbrottsnotis = far_publicera(readings, avbruten=avbruten)
+        target, page_note = voting_targets(readings)
+        if not far_publicera_varde:
+            target, page_note = [], avbrottsnotis
+        flode_sida, flow_note = flow_targets(readings, _page_value_av(target))
+        result = consensus(
+            target,
+            min_agreement=cfg.min_agreement,
+            min_confidence=cfg.min_confidence,
+            decimals=decimals,
+        )
+        flode = (
+            consensus(
+                flode_sida,
+                min_agreement=cfg.min_agreement,
+                min_confidence=cfg.min_confidence,
+                decimals=decimals,
+            )
+            if flode_sida
+            else Consensus(value=None, votes=0, total=0, confidence=0.0)
+        )
+        return target, flode_sida, page_note, flow_note, result, flode
+
+    def _lasa_bilder(
+        self, bilder: list[tuple[np.ndarray, int, bytes | None]], calibration: Calibration
+    ) -> list[Reading]:
+        """Tolkar korningens sidor med en annan kalibrering."""
+        readings: list[Reading] = []
+        for bild, vikt, _payload in bilder:
+            reading = read_image(
+                bild, calibration, self.cfg.reader, timestamp=float(vikt)
+            )
+            reading.weight = vikt
+            readings.append(reading)
+        return readings
+
+    def _autokalibrera(
+        self, bilder: list[tuple[np.ndarray, int, bytes | None]]
+    ) -> tuple[list[Reading], str] | None:
+        """Mater om rutnatet ur korningens egna bilder.
+
+        Det nya rutnatet sparas bara om det ger ett giltigt varde i samma
+        bildserie - alltsa om det bade hittar spolttidssidan (02:00) och far
+        vardesidan efter den att ga ihop. Da har kameran flyttat sig, och da ar
+        en ny kalibrering ratt svar. Ger det inget varde behalls det gamla
+        rutnatet, sa att en dalig bildserie inte forstor en fungerande
+        kalibrering.
+        """
+        if not bilder or self.calibration is None:
+            return None
+
+        # De sidor som vilar pa flest bilder ar stadigast. Att mata pa alla
+        # grupper skulle ta minuter nar en korning aldrig hittar vardet.
+        valda = sorted(bilder, key=lambda item: item[1], reverse=True)[
+            :AUTO_CALIBRATION_MAX_IMAGES
+        ]
+        try:
+            rutor, rapport = measure_cells(
+                [bild for bild, _vikt, _payload in valda],
+                self.calibration.roi,
+                self.cfg.reader,
+                self.cfg.reader.digit_count,
+                prior=self.calibration.cell_boxes,
+            )
+        except ReaderError as exc:
+            log.warning("autokalibrering: kunde inte mata rutnatet (%s) - behaller det gamla", exc)
+            return None
+
+        drift = _rutnat_drift(self.calibration.cell_boxes, rutor)
+        if drift < AUTO_CALIBRATION_MIN_DRIFT_PX:
+            log.info(
+                "autokalibrering: rutnatet ligger redan ratt (drift %.1f px) - behaller det",
+                drift,
+            )
+            return None
+
+        roi = self.calibration.roi
+        if any(
+            box[0] < roi[0] or box[1] < roi[1] or box[2] > roi[2] or box[3] > roi[3]
+            for box in rutor
+        ):
+            log.warning(
+                "autokalibrering: det uppmatta rutnatet ligger utanfor utsnittet %s"
+                " - behaller det gamla (utoka CALIBRATION_ROI och kalibrera om for hand)",
+                roi,
+            )
+            return None
+
+        ny = Calibration(
+            roi=roi,
+            digit_count=self.cfg.reader.digit_count,
+            cell_boxes=list(rutor),
+            notes=(
+                f"autokalibrerad {datetime.now():%Y-%m-%d %H:%M} - rutnatet hade drivit"
+                f" {drift:.0f} px sedan forra kalibreringen"
+            ),
+        )
+
+        readings = self._lasa_bilder(bilder, ny)
+        if not has_recharge_page(readings):
+            log.warning(
+                "autokalibrering: det nya rutnatet hittade ingen spolttidssida (02:00)"
+                " - behaller det gamla"
+            )
+            return None
+
+        _target, _flode_sida, _page_note, _flow_note, result, _flode = self._tolka(readings)
+        if not result.ok:
+            log.warning(
+                "autokalibrering: det nya rutnatet gav inget varde (basta siffra"
+                " %.2f mot kravet %.2f) - behaller det gamla",
+                max((reading.confidence for reading in readings), default=0.0),
+                self.cfg.run.min_confidence,
+            )
+            return None
+
+        try:
+            ny.save(self.cfg.calibration_file)
+        except OSError as exc:
+            log.warning("autokalibrering: kunde inte spara %s: %s", self.cfg.calibration_file, exc)
+            return None
+
+        self.calibration = ny
+        log.info(
+            "autokalibrering: rutnatet hade drivit %.1f px - matt om, sparat och last"
+            " vardet %r (konfidens %.2f)",
+            drift,
+            result.value,
+            result.confidence,
+        )
+        for line in rapport:
+            log.debug("autokalibrering: %s", line)
+        return readings, f"rutnatet flyttades {drift:.0f} px och lastes om automatiskt"
 
     def _skriv_bevis(
         self,
@@ -694,6 +885,9 @@ class NightlyRunner:
         readings: list[Reading] = []
         details: list[dict] = []
         result = Consensus(value=None, votes=0, total=0, confidence=0.0)
+        flode = Consensus(value=None, votes=0, total=0, confidence=0.0)
+        image: str | None = None
+        kalibreringsnotis = ""
 
         log.info("startar korning (version %s), fonster %.0f s", VERSION, duration)
         set_state(running=True, started=started.isoformat(timespec="seconds"))
@@ -721,7 +915,7 @@ class NightlyRunner:
             elif self.use_lamp:
                 log.warning("ingen lampa konfigurerad - laser utan belysning")
 
-            readings, saved, kandidater = self._capture_and_read(
+            readings, saved, kandidater, gruppbilder = self._capture_and_read(
                 duration_s=duration,
                 frames_dir=run_dir,
                 stop_when_ready=stop_early,
@@ -730,24 +924,40 @@ class NightlyRunner:
             # Blev korningen avbruten (granssnittet behovde kameran)? Da har den
             # inte sett ett helt varv, och far darfor inte publicera nagot om
             # spolttidssidan inte hanns med.
-            far_publicera_varde, avbrottsnotis = far_publicera(
-                readings, avbruten=avbrott_begart()
+            avbruten = avbrott_begart()
+            target, flode_sida, page_note, flow_note, result, flode = self._tolka(
+                readings, avbruten=avbruten
             )
 
-            # Vardet som ska ut visas strax efter att pumpen slog om till spolning
-            # (02:00). Sidvarvet ar: klockan -> spolttiden -> VARDET -> flodet,
-            # och bada vardesidorna (t.ex. 0.91 och 0.00) ser likadana ut for
-            # avlasaren: den forsta positionen slackt och tre siffror. Bara
-            # ordningen i varvet skiljer dem at, och forst kommer vardet. Darfor
-            # rostas bara det som kommer efter spolttidssidan.
-            target, page_note = voting_targets(readings)
-            if not far_publicera_varde:
-                target, page_note = [], avbrottsnotis
+            # Kameran kan ha rubbats nagra pixlar - t.ex. vid saltpafyllning - och
+            # da pekar matfonstren utanfor siffrorna: spolttiden 02:00 lases som
+            # 02:90 och vardesidans siffror tappar konfidens. Mata om rutnatet ur
+            # korningens egna bilder och prova igen. Det sparas bara om det nya
+            # rutnatet ger ett giltigt varde i samma bildserie.
+            if (
+                result.value is None
+                and cfg.auto_calibrate
+                and not avbruten
+                and gruppbilder
+            ):
+                omkalibrerad = self._autokalibrera(gruppbilder)
+                if omkalibrerad is not None:
+                    readings, kalibreringsnotis = omkalibrerad
+                    # Bevisbilden ska komma fran det varde som nu lases ur
+                    # samma bilder - inte fran den gamla tolkningen.
+                    kandidater = [
+                        (reading, payload)
+                        for reading, (_bild, _vikt, payload) in zip(readings, gruppbilder)
+                        if reading.ok and payload
+                    ]
+                    target, flode_sida, page_note, flow_note, result, flode = self._tolka(
+                        readings
+                    )
+
             voted = {id(reading) for reading in target}
             # Flodet star pa sidan efter vardet. Den rostas for sig, och bara om
             # den gar att lasa - ett felaktigt flode skulle kunna se ut som ett
             # lackage och larma i onodan.
-            flode_sida, flow_note = flow_targets(readings, _page_value_av(target))
             voted |= {id(reading) for reading in flode_sida}
             details = [
                 {
@@ -771,12 +981,6 @@ class NightlyRunner:
                     len(readings),
                 )
 
-            result = consensus(
-                target,
-                min_agreement=cfg.min_agreement,
-                min_confidence=cfg.min_confidence,
-                decimals=self.cfg.reader.decimals,
-            )
             log.info(
                 "rostning: %s (%d roster, konfidens %.2f)",
                 result.value or "inget varde",
@@ -784,13 +988,6 @@ class NightlyRunner:
                 result.confidence,
             )
 
-            # Flodet: en rostning till, pa sidan efter vardet.
-            flode = consensus(
-                flode_sida,
-                min_agreement=cfg.min_agreement,
-                min_confidence=cfg.min_confidence,
-                decimals=self.cfg.reader.decimals,
-            ) if flode_sida else Consensus(value=None, votes=0, total=0, confidence=0.0)
             if flode.value is not None:
                 log.info("flodet: %s %s (konfidens %.2f)", flode.value, cfg.flow_unit, flode.confidence)
             elif cfg.read_flow:
@@ -854,6 +1051,7 @@ class NightlyRunner:
                 flow_confidence=flode.confidence,
                 flow_votes=flode.votes,
                 flow_note=flow_note,
+                calibration_note=kalibreringsnotis,
             )
 
             # Senaste lasningen pa disk, for vardestjansten och Home Assistant.

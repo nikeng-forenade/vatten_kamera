@@ -151,6 +151,17 @@ FIELDS: tuple[Field, ...] = (
     _field("CLIP_BOTTOM", "Klipp bort nedtill (0-1)", "Displayen", kind="float", minimum=0, maximum=1),
     _field("REQUIRE_BLANK_FIRST", "Krav att forsta positionen ar slackt", "Displayen", kind="bool", default="false"),
     _field("REJECT_ALL_EIGHTS", "Forkasta 888", "Displayen", kind="bool", default="false"),
+    _field(
+        "AUTO_CALIBRATE",
+        "Kalibrera om automatiskt",
+        "Displayen",
+        kind="bool",
+        default="true",
+        help=(
+            "Nar en lasning misslyckas mats rutnatet om ur korningens egna bilder. "
+            "Det sparas bara om det ger ett giltigt varde direkt."
+        ),
+    ),
     # --- Flodet ----------------------------------------------------------
     # Flodet star pa sidan efter vardet i varvet. Det sager om vatten rinner
     # just nu, och larmet bygger pa att det ligger kvar - inte pa en enstaka

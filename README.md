@@ -169,6 +169,19 @@ Det här är den enskilt viktigaste faktorn för att läsningen ska bli pålitli
 Kalibreringen talar om var i bilden siffrorna sitter. Den behöver göras om när kameran
 flyttats — även några centimeter märks, för då flyttar mätfönstren.
 
+### Automatisk omkalibrering
+
+Om en körning inte får fram något värde mäter tjänsten **om rutnätet själv** ur körningens
+egna bilder (`AUTO_CALIBRATE=true`, standard). Det nya rutnätet sparas bara om det ger ett
+giltigt värde i samma bildserie — det vill säga om det både hittar spolttiden `02:00` och
+läser värdet efter den. Annars behålls det gamla rutnätet, så en dålig bildserie kan inte
+förstöra en fungerande kalibrering. När det lyckas syns det i loggen och i
+`latest.json` (`kalibrering`), och nästa körning läser med det nya rutnätet.
+
+Det här täcker den vanligaste driftstörningen: kameran rubbas några pixlar (till exempel
+när saltbehållaren fylls) och mätfönstren hamnar utanför siffrorna. Stäng av med
+`AUTO_CALIBRATE=false` om du hellre vill kalibrera för hand varje gång.
+
 I webbgränssnittets kalibreringspanel tar **Ny bild** flera bilder men visar den skarpaste
 enskilda bilden, så att olika displaylägen inte blandas ihop visuellt. Rutorna provas ändå
 mot hela bildserien. Vyn zoomar in på området kring displayen; kamerans zoom ändras inte.
@@ -262,6 +275,7 @@ Glöm inte `DIGIT_COUNT` i `.env` om displayen har annat antal siffror än fyra.
 | `STOP_WHEN_READY` | `true` | Sluta så snart värdet är fångat |
 | `MIN_AGREEMENT` | `3` | Antal bilder som måste vara eniga |
 | `MIN_CONFIDENCE` | `0.75` | Minsta konfidens per siffra |
+| `AUTO_CALIBRATE` | `true` | Mät om rutnätet automatiskt när en körning missar — sparas bara om det nya rutnätet läser ett värde |
 | `READ_FLOW` | `true` | Läs även flödet (sidan efter värdet). `false` = bara nivån |
 | `FLOW_WARN` | `0.05` | Larma när flödet legat över detta |
 | `FLOW_WARN_MINUTES` | `30` | ...varje läsning i så här många minuter |

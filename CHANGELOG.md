@@ -13,6 +13,29 @@ Nyast överst. Datum är svenska.
 
 ---
 
+## 0.29.0 — 2026-10-19
+
+**Automatisk omkalibrering när kameran har rubbat sig.**
+
+* **Felet**: kameran kan flytta sig några pixlar — till exempel när saltbehållaren fylls. Då
+  pekar mätfönstren utanför siffrorna, spolttiden `02:00` läses som `02:90` och värdesidans
+  siffror tappar konfidens. Körningen får inget värde, och ingenting händer förrän någon
+  kalibrerar om för hand. Mätt 2026-10-19: rutnätet hade drivit ~8 px åt vänster och ~6 px
+  upp sedan 2026-10-07; `02:00` lästes som `02:90` och värdesidan fick konfidens 0,07–0,10.
+* **Nu mäter tjänsten om rutnätet själv** när en körning inte får fram ett värde
+  (`AUTO_CALIBRATE=true`, standard). Mätningen görs ur körningens egna bilder, så kameran
+  behövs inte igen. Det nya rutnätet **sparas bara om det ger ett giltigt värde i samma
+  bildserie** — det måste hitta spolttiden `02:00` och läsa värdesidan efter den. Annars
+  behålls det gamla rutnätet, så en dålig bildserie kan inte förstöra en fungerande
+  kalibrering. Vid lyckad omkalibrering publiceras värdet direkt, och nästa körning läser
+  med det nya rutnätet.
+* **Skydden**: minsta drift 2 px (mindre är mätbrus), det nya rutnätet måste ligga inom
+  `CALIBRATION_ROI`, och högst 24 av körningens sidor mäts om. Rutnätets not i
+  `calibration.json` säger när och varför det ändrades; `latest.json` har fältet
+  `kalibrering` när en körning kalibrerade om.
+* **Inställningen** finns i gränssnittet under **Displayen** och i `.env` som
+  `AUTO_CALIBRATE`.
+
 ## 0.28.1 — 2026-10-07
 
 **Kalibreringsvyn visar en skarp bild — och MQTT går att stänga av i gränssnittet.**

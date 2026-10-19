@@ -13,7 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Bumpas vid varje andring sa vi har koll pa vad som kor pa servern.
-VERSION = "0.28.1"
+VERSION = "0.29.0"
 
 ROOT = Path(__file__).resolve().parent
 
@@ -199,6 +199,11 @@ class RunConfig:
     group_threshold: float = 8.0
     # Sand notis till HA om lasningen misslyckas.
     notify_on_failure: bool = False
+    # Mata om rutnatet sjalv nar en korning inte far fram ett varde. Kameran kan
+    # rubbas nagra pixlar (t.ex. vid saltpafyllning), och da pekar matfonstren
+    # utanfor siffrorna. Det nya rutnatet sparas bara om det ger ett giltigt
+    # varde i samma bildserie - annars behalls det gamla.
+    auto_calibrate: bool = True
     # --- Flodet -----------------------------------------------------------
     # Flodet star pa sidan efter vardet i varvet
     # (klockan -> spolttiden 02:00 -> vardet -> flodet), sa det lases i samma
@@ -318,6 +323,7 @@ def load_config() -> Config:
         min_confidence=_get_float("MIN_CONFIDENCE", 0.75),
         group_threshold=_get_float("GROUP_THRESHOLD", 8.0),
         notify_on_failure=_get_bool("NOTIFY_ON_FAILURE", False),
+        auto_calibrate=_get_bool("AUTO_CALIBRATE", True),
         read_flow=_get_bool("READ_FLOW", True),
         flow_extra_s=_get_float("FLOW_EXTRA_S", 20.0),
         flow_warn=_get_float("FLOW_WARN", 0.05),

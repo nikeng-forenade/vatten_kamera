@@ -18,7 +18,7 @@ import pytest
 
 import pipeline
 from config import ReaderConfig, RunConfig
-from display_reader import Reading, consensus
+from display_reader import Calibration, Reading, consensus
 from pipeline import (
     _page_value_av,
     far_publicera,
@@ -618,3 +618,217 @@ def test_statusen_sager_vilket_som_ar_vardet_och_vilket_som_ar_forsoket() -> Non
     assert status["senaste_forsok"]["ok"] is True
     assert status["senaste_forsok"]["read_at"] == "2026-09-29T06:24:12"
     assert status["display"] == "0.52"
+
+
+# --- Autokalibrering ---------------------------------------------------------
+#
+# Kameran kan rubbas nagra pixlar (t.ex. vid saltpafyllning), och da pekar
+# matfonstren utanfor siffrorna. Da ska korningen mata om rutnatet ur sina egna
+# bilder - men bara spara det om det nya rutnatet faktiskt ger ett varde.
+
+# Rutnatet fore och efter en typisk rubbning: 8 px at vanster och 6 px upp.
+GAMLA_RUTOR = [(30, 10, 70, 50), (80, 14, 120, 54), (130, 18, 170, 58), (180, 22, 220, 62)]
+NYA_RUTOR = [(22, 4, 62, 44), (72, 8, 112, 48), (122, 12, 162, 52), (172, 16, 212, 56)]
+
+
+def autokalibreringsinstans(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> object:
+    """En korning utan kamera och nat, redo att prova autokalibreringen."""
+    monkeypatch.setattr(pipeline.NightlyRunner, "__init__", lambda self, cfg, **kw: None)
+    instans = pipeline.NightlyRunner(None)
+    instans.cfg = SimpleNamespace(
+        run=RunConfig(auto_calibrate=True, min_agreement=1, min_confidence=0.3),
+        reader=ReaderConfig(),
+        calibration_file=tmp_path / "calibration.json",
+    )
+    instans.calibration = Calibration(
+        roi=(0, 0, 300, 100), digit_count=4, cell_boxes=list(GAMLA_RUTOR)
+    )
+    instans.similarity_threshold = 8.0
+    return instans
+
+
+def gruppbilder() -> list[tuple[np.ndarray, int, bytes | None]]:
+    """Tre sidor fran en korning: spolttiden, vardet och flodet."""
+    sidor = ((1, 5), (2, 10), (3, 4))
+    bilder = []
+    for markering, vikt in sidor:
+        bild = np.zeros((100, 300, 3), dtype=np.uint8)
+        bild[0, 0, 0] = markering
+        bilder.append((bild, vikt, b"jpeg"))
+    return bilder
+
+
+def fejkad_bildlasning(markering: int, *, nytt_rutnat: bool) -> Reading:
+    """Lases som en riktig korning: ratt sida bara med det nya rutnatet."""
+    sidor = {
+        1: ("0200", list("0200")),
+        2: ("020", [" ", "0", "2", "0"]),
+        3: ("000", [" ", "0", "0", "0"]),
+    }
+    value, tecken = sidor[markering]
+    return Reading(
+        value=value,
+        confidence=0.75 if nytt_rutnat else 0.0,
+        digits=[cell(tecken) for tecken in tecken],
+        timestamp=0.0,
+        boxes=[],
+    )
+
+
+def test_autokalibrering_sparar_nytt_rutnat_nar_det_laser(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    instans = autokalibreringsinstans(monkeypatch, tmp_path)
+    monkeypatch.setattr(pipeline, "measure_cells", lambda *a, **kw: (list(NYA_RUTOR), ["matt"]))
+    monkeypatch.setattr(
+        pipeline,
+        "read_image",
+        lambda bild, cal, cfg, timestamp=0.0: fejkad_bildlasning(
+            int(bild[0, 0, 0]), nytt_rutnat=tuple(cal.cell_boxes[0]) == tuple(NYA_RUTOR[0])
+        ),
+    )
+
+    svar = instans._autokalibrera(gruppbilder())
+
+    assert svar is not None, "det nya rutnatet ger ett varde och ska sparas"
+    readings, notis = svar
+    assert "flyttades" in notis
+    assert instans.calibration.cell_boxes == NYA_RUTOR, "korningen ska lasa med det nya rutnatet"
+
+    sparad = json.loads((tmp_path / "calibration.json").read_text(encoding="utf-8"))
+    assert [tuple(box) for box in sparad["cell_boxes"]] == NYA_RUTOR
+    assert "autokalibrerad" in sparad["notes"]
+    assert {reading.value for reading in readings} == {"0200", "020", "000"}
+
+
+def test_autokalibrering_sparar_inte_ett_rutnat_som_inte_laser(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ger det nya rutnatet inget varde ar det battre att behalla det gamla."""
+    instans = autokalibreringsinstans(monkeypatch, tmp_path)
+    monkeypatch.setattr(pipeline, "measure_cells", lambda *a, **kw: (list(NYA_RUTOR), ["matt"]))
+    monkeypatch.setattr(
+        pipeline,
+        "read_image",
+        lambda bild, cal, cfg, timestamp=0.0: fejkad_bildlasning(
+            int(bild[0, 0, 0]), nytt_rutnat=False
+        ),
+    )
+
+    assert instans._autokalibrera(gruppbilder()) is None
+    assert instans.calibration.cell_boxes == GAMLA_RUTOR
+    assert not (tmp_path / "calibration.json").exists()
+
+
+def test_autokalibrering_hoppar_over_en_liten_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Nagra pixlars skillnad ar matbrus - det gamla rutnatet lases kvar."""
+    instans = autokalibreringsinstans(monkeypatch, tmp_path)
+    nastan_lika = [(x + 1, y, z + 1, w) for x, y, z, w in GAMLA_RUTOR]
+    monkeypatch.setattr(pipeline, "measure_cells", lambda *a, **kw: (nastan_lika, ["matt"]))
+
+    def ska_inte_lasas(*args: object, **kwargs: object) -> None:
+        raise AssertionError("en liten drift ska inte leda till en ny lasning")
+
+    monkeypatch.setattr(pipeline, "read_image", ska_inte_lasas)
+
+    assert instans._autokalibrera(gruppbilder()) is None
+    assert instans.calibration.cell_boxes == GAMLA_RUTOR
+    assert not (tmp_path / "calibration.json").exists()
+
+
+def test_autokalibrering_vagrar_ett_rutnat_utanfor_utsnittet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    instans = autokalibreringsinstans(monkeypatch, tmp_path)
+    utanfor = [(x, y, z, w + 200) for x, y, z, w in NYA_RUTOR]
+    monkeypatch.setattr(pipeline, "measure_cells", lambda *a, **kw: (utanfor, ["matt"]))
+
+    def ska_inte_lasas(*args: object, **kwargs: object) -> None:
+        raise AssertionError("ett rutnat utanfor utsnittet ska forkastas direkt")
+
+    monkeypatch.setattr(pipeline, "read_image", ska_inte_lasas)
+
+    assert instans._autokalibrera(gruppbilder()) is None
+    assert not (tmp_path / "calibration.json").exists()
+
+
+def _redo_for_korning(instans: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> object:
+    """Gor en testinstans redo att kora run_once utan kamera och nat."""
+    instans.use_lamp = False
+    instans.use_camera_profile = False
+    instans.camera = SimpleNamespace(close=lambda: None)
+    instans.ha = SimpleNamespace(configured=False)
+    instans.mqtt = SimpleNamespace(
+        unit="",
+        disconnect=lambda: None,
+        publish_result=lambda *a, **kw: None,
+        publish_failure=lambda *a, **kw: None,
+    )
+    instans.rest = SimpleNamespace(disconnect=lambda: None)
+    instans.cfg = SimpleNamespace(
+        run=RunConfig(auto_calibrate=True, min_agreement=1, min_confidence=0.3, read_flow=False),
+        reader=ReaderConfig(),
+        mqtt=SimpleNamespace(unit=""),
+        ha=SimpleNamespace(configured=False),
+        calibration_file=tmp_path / "calibration.json",
+    )
+    monkeypatch.setattr(pipeline.NightlyRunner, "_open_publishers", lambda self: (False, False))
+    monkeypatch.setattr(pipeline.NightlyRunner, "_restore_camera", lambda self, xml: None)
+    monkeypatch.setattr(pipeline.NightlyRunner, "_stada_bilder", lambda self, **kw: None)
+    monkeypatch.setattr(pipeline, "write_status", lambda *a, **kw: None)
+    monkeypatch.setattr(pipeline.history, "append", lambda *a, **kw: None)
+    return instans
+
+
+def test_korningen_autokalibrerar_bara_nar_vardet_saknas(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """En lyckad korning ska aldrig rora rutnatet."""
+    instans = _redo_for_korning(autokalibreringsinstans(monkeypatch, tmp_path), tmp_path, monkeypatch)
+
+    kallad = {"ja": False}
+
+    def autokalibrera(self: object, bilder: object) -> None:
+        kallad["ja"] = True
+        return None
+
+    monkeypatch.setattr(pipeline.NightlyRunner, "_autokalibrera", autokalibrera)
+
+    lyckad = [spoltid(bilder=3), varde("020", 0.7, bilder=10)]
+    monkeypatch.setattr(
+        pipeline.NightlyRunner, "_capture_and_read", lambda self, **kw: (lyckad, [], [], [])
+    )
+    summary = instans.run_once(save=False)
+
+    assert summary.value == "020"
+    assert kallad["ja"] is False, "en lyckad korning ska inte kalibrera om"
+
+
+def test_korningen_anvander_det_autokalibrerade_vardet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Nar rutnatet mottes om ska vardet fran samma bildserie publiceras."""
+    instans = _redo_for_korning(autokalibreringsinstans(monkeypatch, tmp_path), tmp_path, monkeypatch)
+
+    misslyckad = [varde("090", 0.05, bilder=5)]
+    monkeypatch.setattr(
+        pipeline.NightlyRunner,
+        "_capture_and_read",
+        lambda self, **kw: (misslyckad, [], [], [(np.zeros((10, 10, 3), np.uint8), 5, None)]),
+    )
+    monkeypatch.setattr(
+        pipeline.NightlyRunner,
+        "_autokalibrera",
+        lambda self, bilder: (
+            [spoltid(bilder=3), varde("020", 0.72, bilder=10)],
+            "rutnatet flyttades 8 px",
+        ),
+    )
+
+    summary = instans.run_once(save=False)
+
+    assert summary.value == "020"
+    assert summary.confidence == pytest.approx(0.72)
+    assert summary.calibration_note == "rutnatet flyttades 8 px"
